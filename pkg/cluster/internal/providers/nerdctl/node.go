@@ -37,7 +37,11 @@ func (n *node) String() string {
 }
 
 func (n *node) Role() (string, error) {
-	cmd := exec.Command(n.binaryName, "inspect",
+	return n.RoleContext(context.Background())
+}
+
+func (n *node) RoleContext(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, n.binaryName, "inspect",
 		"--format", fmt.Sprintf(`{{ index .Config.Labels "%s"}}`, nodeRoleLabelKey),
 		n.name,
 	)
@@ -52,8 +56,12 @@ func (n *node) Role() (string, error) {
 }
 
 func (n *node) IP() (ipv4 string, ipv6 string, err error) {
+	return n.IPContext(context.Background())
+}
+
+func (n *node) IPContext(ctx context.Context) (ipv4 string, ipv6 string, err error) {
 	// retrieve the IP address of the node using docker inspect
-	cmd := exec.Command(n.binaryName, "inspect",
+	cmd := exec.CommandContext(ctx, n.binaryName, "inspect",
 		"-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}},{{.GlobalIPv6Address}}{{end}}",
 		n.name, // ... against the "node" container
 	)
@@ -171,5 +179,9 @@ func (c *nodeCmd) SetStderr(w io.Writer) exec.Cmd {
 }
 
 func (n *node) SerialLogs(w io.Writer) error {
-	return exec.Command(n.binaryName, "logs", n.name).SetStdout(w).SetStderr(w).Run()
+	return n.SerialLogsContext(context.Background(), w)
+}
+
+func (n *node) SerialLogsContext(ctx context.Context, w io.Writer) error {
+	return exec.CommandContext(ctx, n.binaryName, "logs", n.name).SetStdout(w).SetStderr(w).Run()
 }

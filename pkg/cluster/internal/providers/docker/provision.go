@@ -35,7 +35,7 @@ import (
 )
 
 // planCreation creates a slice of funcs that will create the containers
-func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs []func() error, err error) {
+func planCreation(ctx context.Context, cfg *config.Cluster, networkName string) (createContainerFuncs []func(ctx context.Context) error, err error) {
 	// we need to know all the names for NO_PROXY
 	// compute the names first before any actual node details
 	nodeNamer := common.MakeNodeNamer(cfg.Name)
@@ -50,7 +50,7 @@ func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs
 	}
 
 	// these apply to all container creation
-	genericArgs, err := commonArgs(cfg.Name, cfg, networkName, names)
+	genericArgs, err := commonArgs(ctx, cfg.Name, cfg, networkName, names)
 	if err != nil {
 		return nil, err
 	}
@@ -71,12 +71,12 @@ func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs
 		}
 		// plan loadbalancer node
 		name := names[len(names)-1]
-		createContainerFuncs = append(createContainerFuncs, func() error {
+		createContainerFuncs = append(createContainerFuncs, func(ctx context.Context) error {
 			args, err := runArgsForLoadBalancer(cfg, name, genericArgs)
 			if err != nil {
 				return err
 			}
-			return createContainer(name, args)
+			return createContainer(ctx, name, args)
 		})
 	}
 
@@ -100,7 +100,7 @@ func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs
 		// plan actual creation based on role
 		switch node.Role {
 		case config.ControlPlaneRole:
-			createContainerFuncs = append(createContainerFuncs, func() error {
+			createContainerFuncs = append(createContainerFuncs, func(ctx context.Context) error {
 				node.ExtraPortMappings = append(node.ExtraPortMappings,
 					config.PortMapping{
 						ListenAddress: apiServerAddress,
@@ -112,15 +112,15 @@ func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs
 				if err != nil {
 					return err
 				}
-				return createContainerWithWaitUntilSystemdReachesMultiUserSystem(name, args)
+				return createContainerWithWaitUntilSystemdReachesMultiUserSystem(ctx, name, args)
 			})
 		case config.WorkerRole:
-			createContainerFuncs = append(createContainerFuncs, func() error {
+			createContainerFuncs = append(createContainerFuncs, func(ctx context.Context) error {
 				args, err := runArgsForNode(node, cfg.Networking.IPFamily, name, genericArgs)
 				if err != nil {
 					return err
 				}
-				return createContainerWithWaitUntilSystemdReachesMultiUserSystem(name, args)
+				return createContainerWithWaitUntilSystemdReachesMultiUserSystem(ctx, name, args)
 			})
 		default:
 			return nil, errors.Errorf("unknown node role: %q", node.Role)
@@ -130,7 +130,7 @@ func planCreation(cfg *config.Cluster, networkName string) (createContainerFuncs
 }
 
 // commonArgs computes static arguments that apply to all containers
-func commonArgs(cluster string, cfg *config.Cluster, networkName string, nodeNames []string) ([]string, error) {
+func commonArgs(ctx context.Context, cluster string, cfg *config.Cluster, networkName string, nodeNames []string) ([]string, error) {
 	// standard arguments all nodes containers need, computed once
 	args := []string{
 		"--detach", // run the container detached
@@ -180,7 +180,7 @@ func commonArgs(cluster string, cfg *config.Cluster, networkName string, nodeNam
 	}
 
 	// pass proxy environment variables
-	proxyEnv, err := getProxyEnv(cfg, networkName, nodeNames)
+	proxyEnv, err := getProxyEnv(ctx, cfg, networkName, nodeNames)
 	if err != nil {
 		return nil, errors.Wrap(err, "proxy setup error")
 	}
@@ -189,19 +189,19 @@ func commonArgs(cluster string, cfg *config.Cluster, networkName string, nodeNam
 	}
 
 	// handle hosts that have user namespace remapping enabled
-	if usernsRemap() {
+	if usernsRemap(ctx) {
 		args = append(args, "--userns=host")
 	}
 
 	// handle Docker on Btrfs or ZFS
 	// https://github.com/kubernetes-sigs/kind/issues/1416#issuecomment-606514724
-	if mountDevMapper() {
+	if mountDevMapper(ctx) {
 		args = append(args, "--volume", "/dev/mapper:/dev/mapper")
 	}
 
 	// enable /dev/fuse explicitly for fuse-overlayfs
 	// (Rootless Docker does not automatically mount /dev/fuse with --privileged)
-	if mountFuse() {
+	if mountFuse(ctx) {
 		args = append(args, "--device", "/dev/fuse")
 	}
 
@@ -285,11 +285,11 @@ func runArgsForLoadBalancer(cfg *config.Cluster, name string, args []string) ([]
 	return append(args, loadbalancer.Image), nil
 }
 
-func getProxyEnv(cfg *config.Cluster, networkName string, nodeNames []string) (map[string]string, error) {
+func getProxyEnv(ctx context.Context, cfg *config.Cluster, networkName string, nodeNames []string) (map[string]string, error) {
 	envs := common.GetProxyEnvs(cfg)
 	// Specifically add the docker network subnets to NO_PROXY if we are using a proxy
 	if len(envs) > 0 {
-		subnets, err := getSubnets(networkName)
+		subnets, err := getSubnets(ctx, networkName)
 		if err != nil {
 			return nil, err
 		}
@@ -309,9 +309,9 @@ func getProxyEnv(cfg *config.Cluster, networkName string, nodeNames []string) (m
 	return envs, nil
 }
 
-func getSubnets(networkName string) ([]string, error) {
+func getSubnets(ctx context.Context, networkName string) ([]string, error) {
 	format := `{{range (index (index . "IPAM") "Config")}}{{index . "Subnet"}} {{end}}`
-	cmd := exec.Command("docker", "network", "inspect", "-f", format, networkName)
+	cmd := exec.CommandContext(ctx, "docker", "network", "inspect", "-f", format, networkName)
 	lines, err := exec.OutputLines(cmd)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get subnets")
@@ -402,16 +402,16 @@ func generatePortMappings(clusterIPFamily config.ClusterIPFamily, portMappings .
 	return args, nil
 }
 
-func createContainer(name string, args []string) error {
-	return exec.Command("docker", append([]string{"run", "--name", name}, args...)...).Run()
+func createContainer(ctx context.Context, name string, args []string) error {
+	return exec.CommandContext(ctx, "docker", append([]string{"run", "--name", name}, args...)...).Run()
 }
 
-func createContainerWithWaitUntilSystemdReachesMultiUserSystem(name string, args []string) error {
-	if err := exec.Command("docker", append([]string{"run", "--name", name}, args...)...).Run(); err != nil {
+func createContainerWithWaitUntilSystemdReachesMultiUserSystem(ctx context.Context, name string, args []string) error {
+	if err := exec.CommandContext(ctx, "docker", append([]string{"run", "--name", name}, args...)...).Run(); err != nil {
 		return err
 	}
 
-	logCtx, logCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	logCtx, logCancel := context.WithTimeout(ctx, 30*time.Second)
 	logCmd := exec.CommandContext(logCtx, "docker", "logs", "-f", name)
 	defer logCancel()
 	return common.WaitUntilLogRegexpMatches(logCtx, logCmd, common.NodeReachedCgroupsReadyRegexp())

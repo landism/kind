@@ -20,6 +20,7 @@ package kubeconfig
 
 import (
 	"bytes"
+	"context"
 
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/errors"
@@ -32,8 +33,8 @@ import (
 
 // Export exports the kubeconfig given the cluster context and a path to write it to
 // This will always be an external kubeconfig
-func Export(p providers.Provider, name, explicitPath string, external bool) error {
-	cfg, err := get(p, name, external)
+func Export(ctx context.Context, p providers.Provider, name, explicitPath string, external bool) error {
+	cfg, err := get(ctx, p, name, external)
 	if err != nil {
 		return err
 	}
@@ -50,8 +51,8 @@ func Remove(clusterName, explicitPath string) error {
 
 // Get returns the kubeconfig for the cluster
 // external controls if the internal IP address is used or the host endpoint
-func Get(p providers.Provider, name string, external bool) (string, error) {
-	cfg, err := get(p, name, external)
+func Get(ctx context.Context, p providers.Provider, name string, external bool) (string, error) {
+	cfg, err := get(ctx, p, name, external)
 	if err != nil {
 		return "", err
 	}
@@ -68,14 +69,14 @@ func ContextForCluster(kindClusterName string) string {
 	return kubeconfig.KINDClusterKey(kindClusterName)
 }
 
-func get(p providers.Provider, name string, external bool) (*kubeconfig.Config, error) {
+func get(ctx context.Context, p providers.Provider, name string, external bool) (*kubeconfig.Config, error) {
 	// find a control plane node to get the kubeadm config from
-	n, err := p.ListNodes(name)
+	n, err := p.ListNodes(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	var buff bytes.Buffer
-	nodes, err := nodeutils.ControlPlaneNodes(n)
+	nodes, err := nodeutils.ControlPlaneNodesContext(ctx, n)
 	if err != nil {
 		return nil, err
 	}
@@ -86,14 +87,14 @@ func get(p providers.Provider, name string, external bool) (*kubeconfig.Config, 
 	node := nodes[0]
 
 	// grab kubeconfig version from the node
-	if err := node.Command("cat", "/etc/kubernetes/admin.conf").SetStdout(&buff).Run(); err != nil {
+	if err := node.CommandContext(ctx, "cat", "/etc/kubernetes/admin.conf").SetStdout(&buff).Run(); err != nil {
 		return nil, errors.Wrap(err, "failed to get cluster internal kubeconfig")
 	}
 
 	// if we're doing external we need to override the server endpoint
 	server := ""
 	if external {
-		endpoint, err := p.GetAPIServerEndpoint(name)
+		endpoint, err := p.GetAPIServerEndpoint(ctx, name)
 		if err != nil {
 			return nil, err
 		}

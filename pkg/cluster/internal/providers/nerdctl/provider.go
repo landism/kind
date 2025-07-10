@@ -17,6 +17,7 @@ limitations under the License.
 package nerdctl
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -83,15 +84,15 @@ func (p *provider) Binary() string {
 }
 
 // Provision is part of the providers.Provider interface
-func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error) {
+func (p *provider) Provision(ctx context.Context, status *cli.Status, cfg *config.Cluster) (err error) {
 	// TODO: validate cfg
 	// ensure node images are pulled before actually provisioning
-	if err := ensureNodeImages(p.logger, status, cfg, p.Binary()); err != nil {
+	if err := ensureNodeImages(ctx, p.logger, status, cfg, p.Binary()); err != nil {
 		return err
 	}
 
 	// ensure the pre-requisite network exists
-	if err := ensureNetwork(fixedNetworkName, p.Binary()); err != nil {
+	if err := ensureNetwork(ctx, fixedNetworkName, p.Binary()); err != nil {
 		return errors.Wrap(err, "failed to ensure nerdctl network")
 	}
 
@@ -101,7 +102,7 @@ func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error
 	defer func() { status.End(err == nil) }()
 
 	// plan creating the containers
-	createContainerFuncs, err := planCreation(cfg, fixedNetworkName, p.Binary())
+	createContainerFuncs, err := planCreation(ctx, cfg, fixedNetworkName, p.Binary())
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error
 	// TODO: remove once nerdctl handles concurrency better
 	// xref: https://github.com/containerd/nerdctl/issues/2908
 	for _, f := range createContainerFuncs {
-		if err := f(); err != nil {
+		if err := f(ctx); err != nil {
 			return err
 		}
 	}
@@ -118,8 +119,8 @@ func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error
 }
 
 // ListClusters is part of the providers.Provider interface
-func (p *provider) ListClusters() ([]string, error) {
-	cmd := exec.Command(p.Binary(),
+func (p *provider) ListClusters(ctx context.Context) ([]string, error) {
+	cmd := exec.CommandContext(ctx, p.Binary(),
 		"ps",
 		"-a", // show stopped nodes
 		// filter for nodes with the cluster label
@@ -135,8 +136,9 @@ func (p *provider) ListClusters() ([]string, error) {
 }
 
 // ListNodes is part of the providers.Provider interface
-func (p *provider) ListNodes(cluster string) ([]nodes.Node, error) {
-	cmd := exec.Command(p.Binary(),
+func (p *provider) ListNodes(ctx context.Context, cluster string) ([]nodes.Node, error) {
+	cmd := exec.CommandContext(ctx,
+		p.Binary(),
 		"ps",
 		"-a", // show stopped nodes
 		// filter for nodes with the cluster label
@@ -160,7 +162,7 @@ func (p *provider) ListNodes(cluster string) ([]nodes.Node, error) {
 }
 
 // DeleteNodes is part of the providers.Provider interface
-func (p *provider) DeleteNodes(n []nodes.Node) error {
+func (p *provider) DeleteNodes(ctx context.Context, n []nodes.Node) error {
 	if len(n) == 0 {
 		return nil
 	}
@@ -186,29 +188,29 @@ func (p *provider) DeleteNodes(n []nodes.Node) error {
 		argsWait = append(argsWait, node.String())
 		argsNoRestart = append(argsNoRestart, node.String())
 	}
-	if err := exec.Command(p.Binary(), argsNoRestart...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, p.Binary(), argsNoRestart...).Run(); err != nil {
 		return errors.Wrap(err, "failed to update restart policy to 'no'")
 	}
-	if err := exec.Command(p.Binary(), argsStop...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, p.Binary(), argsStop...).Run(); err != nil {
 		return errors.Wrap(err, "failed to stop nodes")
 	}
-	if err := exec.Command(p.Binary(), argsWait...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, p.Binary(), argsWait...).Run(); err != nil {
 		return errors.Wrap(err, "failed to wait for node exit")
 	}
-	if err := exec.Command(p.Binary(), argsRm...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, p.Binary(), argsRm...).Run(); err != nil {
 		return errors.Wrap(err, "failed to delete nodes")
 	}
 	return nil
 }
 
 // GetAPIServerEndpoint is part of the providers.Provider interface
-func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
+func (p *provider) GetAPIServerEndpoint(ctx context.Context, cluster string) (string, error) {
 	// locate the node that hosts this
-	allNodes, err := p.ListNodes(cluster)
+	allNodes, err := p.ListNodes(ctx, cluster)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to list nodes")
 	}
-	n, err := nodeutils.APIServerEndpointNode(allNodes)
+	n, err := nodeutils.APIServerEndpointNodeContext(ctx, allNodes)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get api server endpoint")
 	}
@@ -220,7 +222,8 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 	// "Labels": {
 	// 	"desktop.docker.io/ports/6443/tcp": "10.0.1.7:6443",
 	// }
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		ctx,
 		p.Binary(), "inspect",
 		"--format", fmt.Sprintf(
 			"{{ index .Config.Labels \"desktop.docker.io/ports/%d/tcp\" }}", common.APIServerInternalPort,
@@ -236,7 +239,8 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 	}
 
 	// else, retrieve the specific port mapping via NetworkSettings.Ports
-	cmd = exec.Command(
+	cmd = exec.CommandContext(
+		ctx,
 		p.Binary(), "inspect",
 		"--format", fmt.Sprintf(
 			"{{ with (index (index .NetworkSettings.Ports \"%d/tcp\") 0) }}{{ printf \"%%s\t%%s\" .HostIp .HostPort }}{{ end }}", common.APIServerInternalPort,
@@ -260,13 +264,13 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 }
 
 // GetAPIServerInternalEndpoint is part of the providers.Provider interface
-func (p *provider) GetAPIServerInternalEndpoint(cluster string) (string, error) {
+func (p *provider) GetAPIServerInternalEndpoint(ctx context.Context, cluster string) (string, error) {
 	// locate the node that hosts this
-	allNodes, err := p.ListNodes(cluster)
+	allNodes, err := p.ListNodes(ctx, cluster)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to list nodes")
 	}
-	n, err := nodeutils.APIServerEndpointNode(allNodes)
+	n, err := nodeutils.APIServerEndpointNodeContext(ctx, allNodes)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get api server endpoint")
 	}
@@ -283,7 +287,7 @@ func (p *provider) node(name string) nodes.Node {
 }
 
 // CollectLogs will populate dir with cluster logs and other debug files
-func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
+func (p *provider) CollectLogs(ctx context.Context, dir string, nodes []nodes.Node) error {
 	execToPathFn := func(cmd exec.Cmd, path string) func() error {
 		return func() error {
 			f, err := common.FileOnHost(path)
@@ -298,7 +302,7 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 	fns := []func() error{
 		// record info about the host nerdctl
 		execToPathFn(
-			exec.Command(p.Binary(), "info"),
+			exec.CommandContext(ctx, p.Binary(), "info"),
 			filepath.Join(dir, "docker-info.txt"),
 		),
 	}
@@ -309,20 +313,20 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 		node := n // https://golang.org/doc/faq#closures_and_goroutines
 		name := node.String()
 		path := filepath.Join(dir, name)
-		if err := internallogs.DumpDir(p.logger, node, "/var/log", path); err != nil {
+		if err := internallogs.DumpDir(ctx, p.logger, node, "/var/log", path); err != nil {
 			errs = append(errs, err)
 		}
 
 		fns = append(fns,
-			func() error { return common.CollectLogs(node, path) },
-			execToPathFn(exec.Command(p.Binary(), "inspect", name), filepath.Join(path, "inspect.json")),
+			func() error { return common.CollectLogs(ctx, node, path) },
+			execToPathFn(exec.CommandContext(ctx, p.Binary(), "inspect", name), filepath.Join(path, "inspect.json")),
 			func() error {
 				f, err := common.FileOnHost(filepath.Join(path, "serial.log"))
 				if err != nil {
 					return err
 				}
 				defer f.Close()
-				return node.SerialLogs(f)
+				return node.SerialLogsContext(ctx, f)
 			},
 		)
 	}
@@ -334,10 +338,10 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 
 // Info returns the provider info.
 // The info is cached on the first time of the execution.
-func (p *provider) Info() (*providers.ProviderInfo, error) {
+func (p *provider) Info(ctx context.Context) (*providers.ProviderInfo, error) {
 	var err error
 	if p.info == nil {
-		p.info, err = info(p.Binary())
+		p.info, err = info(ctx, p.Binary())
 	}
 	return p.info, err
 }
@@ -352,8 +356,8 @@ type dockerInfo struct {
 	SecurityOptions []string `json:"SecurityOptions"`
 }
 
-func info(binaryName string) (*providers.ProviderInfo, error) {
-	cmd := exec.Command(binaryName, "info", "--format", "{{json .}}")
+func info(ctx context.Context, binaryName string) (*providers.ProviderInfo, error) {
+	cmd := exec.CommandContext(ctx, binaryName, "info", "--format", "{{json .}}")
 	out, err := exec.Output(cmd)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get nerdctl info")

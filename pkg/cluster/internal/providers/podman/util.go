@@ -17,19 +17,19 @@ limitations under the License.
 package podman
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/errors"
 	"sigs.k8s.io/kind/pkg/exec"
-
 	"sigs.k8s.io/kind/pkg/internal/version"
 )
 
 // IsAvailable checks if podman is available in the system
-func IsAvailable() bool {
-	cmd := exec.Command("podman", "-v")
+func IsAvailable(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "podman", "-v")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
 		return false
@@ -37,8 +37,8 @@ func IsAvailable() bool {
 	return strings.HasPrefix(lines[0], "podman version")
 }
 
-func getPodmanVersion() (*version.Version, error) {
-	cmd := exec.Command("podman", "--version")
+func getPodmanVersion(ctx context.Context) (*version.Version, error) {
+	cmd := exec.CommandContext(ctx, "podman", "--version")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil {
 		return nil, err
@@ -59,9 +59,9 @@ const (
 	minSupportedVersion = "1.8.0"
 )
 
-func ensureMinVersion() error {
+func ensureMinVersion(ctx context.Context) error {
 	// ensure that podman version is a compatible version
-	v, err := getPodmanVersion()
+	v, err := getPodmanVersion(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to check podman version")
 	}
@@ -74,8 +74,9 @@ func ensureMinVersion() error {
 // createAnonymousVolume creates a new anonymous volume
 // with the specified label=true
 // returns the name of the volume created
-func createAnonymousVolume(label string) (string, error) {
-	cmd := exec.Command("podman",
+func createAnonymousVolume(ctx context.Context, label string) (string, error) {
+	cmd := exec.CommandContext(ctx,
+		"podman",
 		"volume",
 		"create",
 		// podman only support filter on key during list
@@ -89,8 +90,9 @@ func createAnonymousVolume(label string) (string, error) {
 }
 
 // getVolumes gets volume names filtered on specified label
-func getVolumes(label string) ([]string, error) {
-	cmd := exec.Command("podman",
+func getVolumes(ctx context.Context, label string) ([]string, error) {
+	cmd := exec.CommandContext(ctx,
+		"podman",
 		"volume",
 		"ls",
 		"--filter", fmt.Sprintf("label=%s", label),
@@ -110,20 +112,20 @@ func getVolumes(label string) ([]string, error) {
 	return strings.Split(string(trimmedOutput), "\n"), nil
 }
 
-func deleteVolumes(names []string) error {
+func deleteVolumes(ctx context.Context, names []string) error {
 	args := []string{
 		"volume",
 		"rm",
 		"--force",
 	}
 	args = append(args, names...)
-	cmd := exec.Command("podman", args...)
+	cmd := exec.CommandContext(ctx, "podman", args...)
 	return cmd.Run()
 }
 
 // mountDevMapper checks if the podman storage driver is Btrfs or ZFS
-func mountDevMapper() bool {
-	cmd := exec.Command("podman", "info", "--format", "json")
+func mountDevMapper(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "podman", "info", "--format", "json")
 	out, err := exec.Output(cmd)
 	if err != nil {
 		return false
@@ -157,8 +159,8 @@ type podmanStorageInfo struct {
 
 // rootless: use fuse-overlayfs by default
 // https://github.com/kubernetes-sigs/kind/issues/2275
-func mountFuse() bool {
-	i, err := info(nil)
+func mountFuse(ctx context.Context) bool {
+	i, err := info(ctx, nil)
 	if err != nil {
 		return false
 	}

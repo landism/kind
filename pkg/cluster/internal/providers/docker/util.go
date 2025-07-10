@@ -17,6 +17,7 @@ limitations under the License.
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -24,8 +25,8 @@ import (
 )
 
 // IsAvailable checks if docker is available in the system
-func IsAvailable() bool {
-	cmd := exec.Command("docker", "-v")
+func IsAvailable(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "docker", "-v")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
 		return false
@@ -34,8 +35,8 @@ func IsAvailable() bool {
 }
 
 // usernsRemap checks if userns-remap is enabled in dockerd
-func usernsRemap() bool {
-	cmd := exec.Command("docker", "info", "--format", "'{{json .SecurityOptions}}'")
+func usernsRemap(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "'{{json .SecurityOptions}}'")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil {
 		return false
@@ -50,10 +51,10 @@ func usernsRemap() bool {
 
 // mountDevMapper checks if the Docker storage driver is Btrfs or ZFS
 // or if the backing filesystem is Btrfs
-func mountDevMapper() bool {
+func mountDevMapper(ctx context.Context) bool {
 	storage := ""
 	// check the docker storage driver
-	cmd := exec.Command("docker", "info", "-f", "{{.Driver}}")
+	cmd := exec.CommandContext(ctx, "docker", "info", "-f", "{{.Driver}}")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
 		return false
@@ -67,7 +68,7 @@ func mountDevMapper() bool {
 	// check the backing file system
 	// docker info -f '{{json .DriverStatus  }}'
 	// [["Backing Filesystem","extfs"],["Supports d_type","true"],["Native Overlay Diff","true"]]
-	cmd = exec.Command("docker", "info", "-f", "{{json .DriverStatus }}")
+	cmd = exec.CommandContext(ctx, "docker", "info", "-f", "{{json .DriverStatus }}")
 	lines, err = exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
 		return false
@@ -88,8 +89,8 @@ func mountDevMapper() bool {
 
 // rootless: use fuse-overlayfs by default
 // https://github.com/kubernetes-sigs/kind/issues/2275
-func mountFuse() bool {
-	i, err := info()
+func mountFuse(ctx context.Context) bool {
+	i, err := info(ctx)
 	if err != nil {
 		return false
 	}

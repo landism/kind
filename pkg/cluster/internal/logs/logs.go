@@ -18,6 +18,7 @@ package logs
 
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -33,8 +34,9 @@ import (
 )
 
 // DumpDir dumps the dir nodeDir on the node to the dir hostDir on the host
-func DumpDir(logger log.Logger, node nodes.Node, nodeDir, hostDir string) (err error) {
-	cmd := node.Command(
+func DumpDir(ctx context.Context, logger log.Logger, node nodes.Node, nodeDir, hostDir string) (err error) {
+	cmd := node.CommandContext(
+		ctx,
 		"sh", "-c",
 		// Tar will exit 1 if a file changed during the archival.
 		// We don't care about this, so we're invoking it in a shell

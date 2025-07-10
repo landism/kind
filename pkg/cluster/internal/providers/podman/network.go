@@ -17,6 +17,7 @@ limitations under the License.
 package podman
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"net"
@@ -42,9 +43,9 @@ const fixedNetworkName = "kind"
 
 // ensureNetwork creates a new network
 // podman only creates IPv6 networks for versions >= 2.2.0
-func ensureNetwork(name string) error {
+func ensureNetwork(ctx context.Context, name string) error {
 	// network already exists
-	if checkIfNetworkExists(name) {
+	if checkIfNetworkExists(ctx, name) {
 		return nil
 	}
 
@@ -52,7 +53,7 @@ func ensureNetwork(name string) error {
 	// obtained from the ULA fc00::/8 range
 	// Make N attempts with "probing" in case we happen to collide
 	subnet := generateULASubnetFromName(name, 0)
-	err := createNetwork(name, subnet)
+	err := createNetwork(ctx, name, subnet)
 	if err == nil {
 		// Success!
 		return nil
@@ -60,7 +61,7 @@ func ensureNetwork(name string) error {
 
 	if isUnknownIPv6FlagError(err) ||
 		isIPv6DisabledError(err) {
-		return createNetwork(name, "")
+		return createNetwork(ctx, name, "")
 	}
 
 	// Only continue if the error is because of the subnet range
@@ -73,7 +74,7 @@ func ensureNetwork(name string) error {
 	const maxAttempts = 5
 	for attempt := int32(1); attempt < maxAttempts; attempt++ {
 		subnet := generateULASubnetFromName(name, attempt)
-		err = createNetwork(name, subnet)
+		err = createNetwork(ctx, name, subnet)
 		if err == nil {
 			// success!
 			return nil
@@ -86,16 +87,17 @@ func ensureNetwork(name string) error {
 
 }
 
-func createNetwork(name, ipv6Subnet string) error {
+func createNetwork(ctx context.Context, name, ipv6Subnet string) error {
 	if ipv6Subnet == "" {
-		return exec.Command("podman", "network", "create", "-d=bridge", name).Run()
+		return exec.CommandContext(ctx, "podman", "network", "create", "-d=bridge", name).Run()
 	}
 	return exec.Command("podman", "network", "create", "-d=bridge",
 		"--ipv6", "--subnet", ipv6Subnet, name).Run()
 }
 
-func checkIfNetworkExists(name string) bool {
-	_, err := exec.Output(exec.Command(
+func checkIfNetworkExists(ctx context.Context, name string) bool {
+	_, err := exec.Output(exec.CommandContext(
+		ctx,
 		"podman", "network", "inspect",
 		regexp.QuoteMeta(name),
 	))

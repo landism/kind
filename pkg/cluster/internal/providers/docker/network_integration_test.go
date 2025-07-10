@@ -37,9 +37,9 @@ func TestIntegrationEnsureNetworkConcurrent(t *testing.T) {
 
 	// cleanup
 	cleanup := func() {
-		ids, _ := networksWithName(testNetworkName)
+		ids, _ := networksWithName(t.Context(), testNetworkName)
 		if len(ids) > 0 {
-			_ = deleteNetworks(ids...)
+			_ = deleteNetworks(t.Context(), ids...)
 		}
 	}
 	cleanup()
@@ -52,7 +52,7 @@ func TestIntegrationEnsureNetworkConcurrent(t *testing.T) {
 	errCh := make(chan error, networkConcurrency)
 	for i := 0; i < networkConcurrency; i++ {
 		go func() {
-			errCh <- ensureNetwork(testNetworkName)
+			errCh <- ensureNetwork(t.Context(), testNetworkName)
 		}()
 	}
 	for i := 0; i < networkConcurrency; i++ {

@@ -17,6 +17,7 @@ limitations under the License.
 package create
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"time"
@@ -64,10 +65,9 @@ type ClusterOptions struct {
 	DisplaySalutation bool
 }
 
-// Cluster creates a cluster
-func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) error {
+func Cluster(ctx context.Context, logger log.Logger, p providers.Provider, opts *ClusterOptions) error {
 	// validate provider first
-	if err := validateProvider(p); err != nil {
+	if err := validateProvider(ctx, p); err != nil {
 		return err
 	}
 
@@ -77,7 +77,7 @@ func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) erro
 	}
 
 	// Check if the cluster name already exists
-	if err := alreadyExists(p, opts.Config.Name); err != nil {
+	if err := alreadyExists(ctx, p, opts.Config.Name); err != nil {
 		return err
 	}
 
@@ -98,10 +98,10 @@ func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) erro
 	logger.V(0).Infof("Creating cluster %q ...\n", opts.Config.Name)
 
 	// Create node containers implementing defined config Nodes
-	if err := p.Provision(status, opts.Config); err != nil {
+	if err := p.Provision(ctx, status, opts.Config); err != nil {
 		// In case of errors nodes are deleted (except if retain is explicitly set)
 		if !opts.Retain {
-			_ = delete.Cluster(logger, p, opts.Config.Name, opts.KubeconfigPath)
+			_ = delete.Cluster(ctx, logger, p, opts.Config.Name, opts.KubeconfigPath)
 		}
 		return err
 	}
@@ -132,9 +132,9 @@ func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) erro
 	// run all actions
 	actionsContext := actions.NewActionContext(logger, status, p, opts.Config)
 	for _, action := range actionsToRun {
-		if err := action.Execute(actionsContext); err != nil {
+		if err := action.Execute(ctx, actionsContext); err != nil {
 			if !opts.Retain {
-				_ = delete.Cluster(logger, p, opts.Config.Name, opts.KubeconfigPath)
+				_ = delete.Cluster(ctx, logger, p, opts.Config.Name, opts.KubeconfigPath)
 			}
 			return err
 		}
@@ -151,7 +151,7 @@ func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) erro
 	var err error
 	for _, b := range []time.Duration{0, time.Millisecond, time.Millisecond * 50, time.Millisecond * 100} {
 		time.Sleep(b)
-		if err = kubeconfig.Export(p, opts.Config.Name, opts.KubeconfigPath, true); err == nil {
+		if err = kubeconfig.Export(ctx, p, opts.Config.Name, opts.KubeconfigPath, true); err == nil {
 			break
 		}
 	}
@@ -173,8 +173,8 @@ func Cluster(logger log.Logger, p providers.Provider, opts *ClusterOptions) erro
 
 // alreadyExists returns an error if the cluster name already exists
 // or if we had an error checking
-func alreadyExists(p providers.Provider, name string) error {
-	n, err := p.ListNodes(name)
+func alreadyExists(ctx context.Context, p providers.Provider, name string) error {
+	n, err := p.ListNodes(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -240,8 +240,8 @@ func fixupOptions(opts *ClusterOptions) error {
 	return nil
 }
 
-func validateProvider(p providers.Provider) error {
-	info, err := p.Info()
+func validateProvider(ctx context.Context, p providers.Provider) error {
+	info, err := p.Info(ctx)
 	if err != nil {
 		return err
 	}

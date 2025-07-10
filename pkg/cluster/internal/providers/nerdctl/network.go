@@ -17,6 +17,7 @@ limitations under the License.
 package nerdctl
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
@@ -42,9 +43,9 @@ import (
 const fixedNetworkName = "kind"
 
 // ensureNetwork checks if docker network by name exists, if not it creates it
-func ensureNetwork(name, binaryName string) error {
+func ensureNetwork(ctx context.Context, name, binaryName string) error {
 	// check if network exists already and remove any duplicate networks
-	exists, err := checkIfNetworkExists(name, binaryName)
+	exists, err := checkIfNetworkExists(ctx, name, binaryName)
 	if err != nil {
 		return err
 	}
@@ -57,8 +58,8 @@ func ensureNetwork(name, binaryName string) error {
 	}
 
 	subnet := generateULASubnetFromName(name, 0)
-	mtu := getDefaultNetworkMTU(binaryName)
-	err = createNetwork(name, subnet, mtu, binaryName)
+	mtu := getDefaultNetworkMTU(ctx, binaryName)
+	err = createNetwork(ctx, name, subnet, mtu, binaryName)
 	if err == nil {
 		// Success!
 		return nil
@@ -70,12 +71,12 @@ func ensureNetwork(name, binaryName string) error {
 	// If it is, make more attempts below
 	if isIPv6UnavailableError(err) {
 		// only one attempt, IPAM is automatic in ipv4 only
-		return createNetwork(name, "", mtu, binaryName)
+		return createNetwork(ctx, name, "", mtu, binaryName)
 	}
 	if isPoolOverlapError(err) {
 		// pool overlap suggests perhaps another process created the network
 		// check if network exists already and remove any duplicate networks
-		exists, err := checkIfNetworkExists(name, binaryName)
+		exists, err := checkIfNetworkExists(ctx, name, binaryName)
 		if err != nil {
 			return err
 		}
@@ -92,7 +93,7 @@ func ensureNetwork(name, binaryName string) error {
 	const maxAttempts = 5
 	for attempt := int32(1); attempt < maxAttempts; attempt++ {
 		subnet := generateULASubnetFromName(name, attempt)
-		err = createNetwork(name, subnet, mtu, binaryName)
+		err = createNetwork(ctx, name, subnet, mtu, binaryName)
 		if err == nil {
 			// success!
 			return nil
@@ -100,7 +101,7 @@ func ensureNetwork(name, binaryName string) error {
 		if isPoolOverlapError(err) {
 			// pool overlap suggests perhaps another process created the network
 			// check if network exists already and remove any duplicate networks
-			exists, err := checkIfNetworkExists(name, binaryName)
+			exists, err := checkIfNetworkExists(ctx, name, binaryName)
 			if err != nil {
 				return err
 			}
@@ -116,7 +117,7 @@ func ensureNetwork(name, binaryName string) error {
 	return errors.New("exhausted attempts trying to find a non-overlapping subnet")
 }
 
-func createNetwork(name, ipv6Subnet string, mtu int, binaryName string) error {
+func createNetwork(ctx context.Context, name, ipv6Subnet string, mtu int, binaryName string) error {
 	args := []string{"network", "create", "-d=bridge"}
 	// TODO: Not supported in nerdctl yet
 	//	"-o", "com.docker.network.bridge.enable_ip_masquerade=true",
@@ -127,12 +128,12 @@ func createNetwork(name, ipv6Subnet string, mtu int, binaryName string) error {
 		args = append(args, "--ipv6", "--subnet", ipv6Subnet)
 	}
 	args = append(args, name)
-	return exec.Command(binaryName, args...).Run()
+	return exec.CommandContext(ctx, binaryName, args...).Run()
 }
 
 // getDefaultNetworkMTU obtains the MTU from the docker default network
-func getDefaultNetworkMTU(binaryName string) int {
-	cmd := exec.Command(binaryName, "network", "inspect", "bridge",
+func getDefaultNetworkMTU(ctx context.Context, binaryName string) int {
+	cmd := exec.CommandContext(ctx, binaryName, "network", "inspect", "bridge",
 		"-f", `{{ index .Options "com.docker.network.driver.mtu" }}`)
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
@@ -145,8 +146,9 @@ func getDefaultNetworkMTU(binaryName string) int {
 	return mtu
 }
 
-func checkIfNetworkExists(name, binaryName string) (bool, error) {
-	out, err := exec.Output(exec.Command(
+func checkIfNetworkExists(ctx context.Context, name, binaryName string) (bool, error) {
+	out, err := exec.Output(exec.CommandContext(
+		ctx,
 		binaryName, "network", "inspect",
 		name, "--format={{.Name}}",
 	))

@@ -18,16 +18,16 @@ limitations under the License.
 package kubeadmjoin
 
 import (
+	"context"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/cluster/constants"
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
+	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/errors"
 	"sigs.k8s.io/kind/pkg/exec"
 	"sigs.k8s.io/kind/pkg/internal/version"
 	"sigs.k8s.io/kind/pkg/log"
-
-	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 
 	"sigs.k8s.io/kind/pkg/cluster/internal/create/actions"
 )
@@ -42,30 +42,30 @@ func NewAction() actions.Action {
 }
 
 // Execute runs the action
-func (a *Action) Execute(ctx *actions.ActionContext) error {
-	allNodes, err := ctx.Nodes()
+func (a *Action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
 
 	// join secondary control plane nodes if any
-	secondaryControlPlanes, err := nodeutils.SecondaryControlPlaneNodes(allNodes)
+	secondaryControlPlanes, err := nodeutils.SecondaryControlPlaneNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
 	if len(secondaryControlPlanes) > 0 {
-		if err := joinSecondaryControlPlanes(ctx, secondaryControlPlanes); err != nil {
+		if err := joinSecondaryControlPlanes(cctx, actionContext, secondaryControlPlanes); err != nil {
 			return err
 		}
 	}
 
 	// then join worker nodes if any
-	workers, err := nodeutils.SelectNodesByRole(allNodes, constants.WorkerNodeRoleValue)
+	workers, err := nodeutils.SelectNodesByRoleContext(cctx, allNodes, constants.WorkerNodeRoleValue)
 	if err != nil {
 		return err
 	}
 	if len(workers) > 0 {
-		if err := joinWorkers(ctx, workers); err != nil {
+		if err := joinWorkers(cctx, actionContext, workers); err != nil {
 			return err
 		}
 	}
@@ -74,51 +74,53 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 }
 
 func joinSecondaryControlPlanes(
-	ctx *actions.ActionContext,
+	cctx context.Context,
+	actionContext *actions.ActionContext,
 	secondaryControlPlanes []nodes.Node,
 ) error {
-	ctx.Status.Start("Joining more control-plane nodes 🎮")
-	defer ctx.Status.End(false)
+	actionContext.Status.Start("Joining more control-plane nodes 🎮")
+	defer actionContext.Status.End(false)
 
 	// TODO(bentheelder): it's too bad we can't do this concurrently
 	// (this is not safe currently)
 	for _, node := range secondaryControlPlanes {
 		node := node // capture loop variable
-		if err := runKubeadmJoin(ctx.Logger, node); err != nil {
+		if err := runKubeadmJoin(cctx, actionContext.Logger, node); err != nil {
 			return err
 		}
 	}
 
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }
 
 func joinWorkers(
-	ctx *actions.ActionContext,
+	cctx context.Context,
+	actionContext *actions.ActionContext,
 	workers []nodes.Node,
 ) error {
-	ctx.Status.Start("Joining worker nodes 🚜")
-	defer ctx.Status.End(false)
+	actionContext.Status.Start("Joining worker nodes 🚜")
+	defer actionContext.Status.End(false)
 
 	// create the workers concurrently
-	fns := []func() error{}
+	fns := []func(ctx context.Context) error{}
 	for _, node := range workers {
 		node := node // capture loop variable
-		fns = append(fns, func() error {
-			return runKubeadmJoin(ctx.Logger, node)
+		fns = append(fns, func(ctx context.Context) error {
+			return runKubeadmJoin(ctx, actionContext.Logger, node)
 		})
 	}
-	if err := errors.UntilErrorConcurrent(fns); err != nil {
+	if err := errors.UntilErrorConcurrentContext(cctx, fns); err != nil {
 		return err
 	}
 
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }
 
 // runKubeadmJoin executes kubeadm join command
-func runKubeadmJoin(logger log.Logger, node nodes.Node) error {
-	kubeVersionStr, err := nodeutils.KubeVersion(node)
+func runKubeadmJoin(ctx context.Context, logger log.Logger, node nodes.Node) error {
+	kubeVersionStr, err := nodeutils.KubeVersionContext(ctx, node)
 	if err != nil {
 		return errors.Wrap(err, "failed to get kubernetes version from node")
 	}
@@ -142,7 +144,7 @@ func runKubeadmJoin(logger log.Logger, node nodes.Node) error {
 	}
 
 	// run kubeadm join
-	cmd := node.Command("kubeadm", args...)
+	cmd := node.CommandContext(ctx, "kubeadm", args...)
 	lines, err := exec.CombinedOutputLines(cmd)
 	logger.V(3).Info(strings.Join(lines, "\n"))
 	if err != nil {

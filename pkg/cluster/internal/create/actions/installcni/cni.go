@@ -19,14 +19,15 @@ package installcni
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"text/template"
 
-	"sigs.k8s.io/kind/pkg/errors"
-	"sigs.k8s.io/kind/pkg/internal/apis/config"
-
 	"sigs.k8s.io/kind/pkg/cluster/internal/create/actions"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
+	"sigs.k8s.io/kind/pkg/errors"
+
+	"sigs.k8s.io/kind/pkg/internal/apis/config"
 	"sigs.k8s.io/kind/pkg/internal/patch"
 )
 
@@ -38,17 +39,17 @@ func NewAction() actions.Action {
 }
 
 // Execute runs the action
-func (a *action) Execute(ctx *actions.ActionContext) error {
-	ctx.Status.Start("Installing CNI 🔌")
-	defer ctx.Status.End(false)
+func (a *action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	actionContext.Status.Start("Installing CNI 🔌")
+	defer actionContext.Status.End(false)
 
-	allNodes, err := ctx.Nodes()
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
 
 	// get the target node for this task
-	controlPlanes, err := nodeutils.ControlPlaneNodes(allNodes)
+	controlPlanes, err := nodeutils.ControlPlaneNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
@@ -56,7 +57,7 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 
 	// read the manifest from the node
 	var raw bytes.Buffer
-	if err := node.Command("cat", "/kind/manifests/default-cni.yaml").SetStdout(&raw).Run(); err != nil {
+	if err := node.CommandContext(cctx, "cat", "/kind/manifests/default-cni.yaml").SetStdout(&raw).Run(); err != nil {
 		return errors.Wrap(err, "failed to read CNI manifest")
 	}
 	manifest := raw.String()
@@ -77,7 +78,7 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 		err = t.Execute(&out, &struct {
 			PodSubnet string
 		}{
-			PodSubnet: ctx.Config.Networking.PodSubnet,
+			PodSubnet: actionContext.Config.Networking.PodSubnet,
 		})
 		if err != nil {
 			return errors.Wrap(err, "failed to execute CNI manifest template")
@@ -91,7 +92,7 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 	// not intended for external usage and is unstable.
 	if strings.Contains(manifest, "would you kindly patch this file") {
 		// Add the controlplane endpoint so kindnet doesn´t have to wait for kube-proxy
-		controlPlaneEndpoint, err := ctx.Provider.GetAPIServerInternalEndpoint(ctx.Config.Name)
+		controlPlaneEndpoint, err := actionContext.Provider.GetAPIServerInternalEndpoint(cctx, actionContext.Config.Name)
 		if err != nil {
 			return err
 		}
@@ -117,10 +118,11 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 		manifest = patchedConfig
 	}
 
-	ctx.Logger.V(5).Infof("Using the following Kindnetd config:\n%s", manifest)
+	actionContext.Logger.V(5).Infof("Using the following Kindnetd config:\n%s", manifest)
 
 	// install the manifest
-	if err := node.Command(
+	if err := node.CommandContext(
+		cctx,
 		"kubectl", "create", "--kubeconfig=/etc/kubernetes/admin.conf",
 		"-f", "-",
 	).SetStdin(strings.NewReader(manifest)).Run(); err != nil {
@@ -128,6 +130,6 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// mark success
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }

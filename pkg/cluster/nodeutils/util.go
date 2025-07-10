@@ -18,6 +18,7 @@ package nodeutils
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,8 +34,12 @@ import (
 
 // KubeVersion returns the Kubernetes version installed on the node
 func KubeVersion(n nodes.Node) (version string, err error) {
+	return KubeVersionContext(context.Background(), n)
+}
+
+func KubeVersionContext(ctx context.Context, n nodes.Node) (version string, err error) {
 	// grab kubernetes version from the node image
-	cmd := n.Command("cat", "/kind/version")
+	cmd := n.CommandContext(ctx, "cat", "/kind/version")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get file")
@@ -47,17 +52,25 @@ func KubeVersion(n nodes.Node) (version string, err error) {
 
 // WriteFile writes content to dest on the node
 func WriteFile(n nodes.Node, dest, content string) error {
+	return WriteFileContext(context.Background(), n, dest, content)
+}
+
+func WriteFileContext(ctx context.Context, n nodes.Node, dest, content string) error {
 	// create destination directory
-	err := n.Command("mkdir", "-p", path.Dir(dest)).Run()
+	err := n.CommandContext(ctx, "mkdir", "-p", path.Dir(dest)).Run()
 	if err != nil {
 		return errors.Wrapf(err, "failed to create directory %s", path.Dir(dest))
 	}
 
-	return n.Command("cp", "/dev/stdin", dest).SetStdin(strings.NewReader(content)).Run()
+	return n.CommandContext(ctx, "cp", "/dev/stdin", dest).SetStdin(strings.NewReader(content)).Run()
 }
 
 // CopyNodeToNode copies file from a to b
 func CopyNodeToNode(a, b nodes.Node, file string) error {
+	return CopyNodeToNodeContext(context.Background(), a, b, file)
+}
+
+func CopyNodeToNodeContext(ctx context.Context, a, b nodes.Node, file string) error {
 	// create destination directory
 	err := b.Command("mkdir", "-p", path.Dir(file)).Run()
 	if err != nil {
@@ -67,10 +80,10 @@ func CopyNodeToNode(a, b nodes.Node, file string) error {
 	// TODO: experiment with streaming instead to avoid the copy
 	// for now we only use this for small files so it's not worth the complexity
 	var buff bytes.Buffer
-	if err := a.Command("cat", file).SetStdout(&buff).Run(); err != nil {
+	if err := a.CommandContext(ctx, "cat", file).SetStdout(&buff).Run(); err != nil {
 		return errors.Wrapf(err, "failed to read %q from node", file)
 	}
-	if err := b.Command("cp", "/dev/stdin", file).SetStdin(&buff).Run(); err != nil {
+	if err := b.CommandContext(ctx, "cp", "/dev/stdin", file).SetStdin(&buff).Run(); err != nil {
 		return errors.Wrapf(err, "failed to write %q to node", file)
 	}
 

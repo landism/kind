@@ -17,18 +17,19 @@ limitations under the License.
 package nerdctl
 
 import (
+	"context"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/exec"
 )
 
 // IsAvailable checks if nerdctl (or finch) is available in the system
-func IsAvailable() bool {
-	cmd := exec.Command("nerdctl", "-v")
+func IsAvailable(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "nerdctl", "-v")
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
 		// check finch
-		cmd = exec.Command("finch", "-v")
+		cmd = exec.CommandContext(ctx, "finch", "-v")
 		lines, err = exec.OutputLines(cmd)
 		if err != nil || len(lines) != 1 {
 			return false
@@ -40,8 +41,8 @@ func IsAvailable() bool {
 
 // rootless: use fuse-overlayfs by default
 // https://github.com/kubernetes-sigs/kind/issues/2275
-func mountFuse(binaryName string) bool {
-	i, err := info(binaryName)
+func mountFuse(ctx context.Context, binaryName string) bool {
+	i, err := info(ctx, binaryName)
 	if err != nil {
 		return false
 	}

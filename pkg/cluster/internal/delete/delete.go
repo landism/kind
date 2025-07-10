@@ -17,6 +17,8 @@ limitations under the License.
 package delete
 
 import (
+	"context"
+
 	"sigs.k8s.io/kind/pkg/errors"
 	"sigs.k8s.io/kind/pkg/log"
 
@@ -27,8 +29,8 @@ import (
 // Cluster deletes the cluster identified by ctx
 // explicitKubeconfigPath is --kubeconfig, following the rules from
 // https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
-func Cluster(logger log.Logger, p providers.Provider, name, explicitKubeconfigPath string) error {
-	n, err := p.ListNodes(name)
+func Cluster(ctx context.Context, logger log.Logger, p providers.Provider, name, explicitKubeconfigPath string) error {
+	n, err := p.ListNodes(ctx, name)
 	if err != nil {
 		return errors.Wrap(err, "error listing nodes")
 	}
@@ -39,7 +41,7 @@ func Cluster(logger log.Logger, p providers.Provider, name, explicitKubeconfigPa
 	}
 
 	if len(n) > 0 {
-		err = p.DeleteNodes(n)
+		err = p.DeleteNodes(ctx, n)
 		if err != nil {
 			return err
 		}

@@ -19,9 +19,6 @@ package docker
 import (
 	"fmt"
 	"strings"
-
-	"sigs.k8s.io/kind/pkg/errors"
-	"sigs.k8s.io/kind/pkg/exec"
 )
 
 // SplitImage splits an image into (registry,tag) following these cases:
@@ -61,26 +58,4 @@ func SplitImage(image string) (registry, tag string, err error) {
 	// case: alpine:latest
 	// case: alpine:latest@sha256:28ef97b8686a0b5399129e9b763d5b7e5ff03576aa5580d6f4182a49c5fe1913
 	return image[:firstColon], image[firstColon+1:], nil
-}
-
-// ImageInspect return low-level information on containers images
-func ImageInspect(containerNameOrID, format string) ([]string, error) {
-	cmd := exec.Command("docker", "image", "inspect",
-		"-f", format,
-		containerNameOrID, // ... against the container
-	)
-
-	return exec.OutputLines(cmd)
-}
-
-// ImageID return the Id of the container image
-func ImageID(containerNameOrID string) (string, error) {
-	lines, err := ImageInspect(containerNameOrID, "{{ .Id }}")
-	if err != nil {
-		return "", err
-	}
-	if len(lines) != 1 {
-		return "", errors.Errorf("Docker image ID should only be one line, got %d lines", len(lines))
-	}
-	return lines[0], nil
 }

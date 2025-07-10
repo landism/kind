@@ -18,6 +18,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
@@ -47,9 +48,9 @@ import (
 const fixedNetworkName = "kind"
 
 // ensureNetwork checks if docker network by name exists, if not it creates it
-func ensureNetwork(name string) error {
+func ensureNetwork(ctx context.Context, name string) error {
 	// check if network exists already and remove any duplicate networks
-	exists, err := removeDuplicateNetworks(name)
+	exists, err := removeDuplicateNetworks(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -66,8 +67,8 @@ func ensureNetwork(name string) error {
 	// Use the MTU configured for the docker default network
 	// Make N attempts with "probing" in case we happen to collide
 	subnet := generateULASubnetFromName(name, 0)
-	mtu := getDefaultNetworkMTU()
-	err = createNetworkNoDuplicates(name, subnet, mtu)
+	mtu := getDefaultNetworkMTU(ctx)
+	err = createNetworkNoDuplicates(ctx, name, subnet, mtu)
 	if err == nil {
 		// Success!
 		return nil
@@ -79,12 +80,12 @@ func ensureNetwork(name string) error {
 	// If it is, make more attempts below
 	if isIPv6UnavailableError(err) {
 		// only one attempt, IPAM is automatic in ipv4 only
-		return createNetworkNoDuplicates(name, "", mtu)
+		return createNetworkNoDuplicates(ctx, name, "", mtu)
 	}
 	if isPoolOverlapError(err) {
 		// pool overlap suggests perhaps another process created the network
 		// check if network exists already and remove any duplicate networks
-		exists, err := checkIfNetworkExists(name)
+		exists, err := checkIfNetworkExists(ctx, name)
 		if err != nil {
 			return err
 		}
@@ -101,7 +102,7 @@ func ensureNetwork(name string) error {
 	const maxAttempts = 5
 	for attempt := int32(1); attempt < maxAttempts; attempt++ {
 		subnet := generateULASubnetFromName(name, attempt)
-		err = createNetworkNoDuplicates(name, subnet, mtu)
+		err = createNetworkNoDuplicates(ctx, name, subnet, mtu)
 		if err == nil {
 			// success!
 			return nil
@@ -109,7 +110,7 @@ func ensureNetwork(name string) error {
 		if isPoolOverlapError(err) {
 			// pool overlap suggests perhaps another process created the network
 			// check if network exists already and remove any duplicate networks
-			exists, err := checkIfNetworkExists(name)
+			exists, err := checkIfNetworkExists(ctx, name)
 			if err != nil {
 				return err
 			}
@@ -125,28 +126,28 @@ func ensureNetwork(name string) error {
 	return errors.New("exhausted attempts trying to find a non-overlapping subnet")
 }
 
-func createNetworkNoDuplicates(name, ipv6Subnet string, mtu int) error {
-	if err := createNetwork(name, ipv6Subnet, mtu); err != nil && !isNetworkAlreadyExistsError(err) {
+func createNetworkNoDuplicates(ctx context.Context, name, ipv6Subnet string, mtu int) error {
+	if err := createNetwork(ctx, name, ipv6Subnet, mtu); err != nil && !isNetworkAlreadyExistsError(err) {
 		return err
 	}
-	_, err := removeDuplicateNetworks(name)
+	_, err := removeDuplicateNetworks(ctx, name)
 	return err
 }
 
-func removeDuplicateNetworks(name string) (bool, error) {
-	networks, err := sortedNetworksWithName(name)
+func removeDuplicateNetworks(ctx context.Context, name string) (bool, error) {
+	networks, err := sortedNetworksWithName(ctx, name)
 	if err != nil {
 		return false, err
 	}
 	if len(networks) > 1 {
-		if err := deleteNetworks(networks[1:]...); err != nil && !isOnlyErrorNoSuchNetwork(err) {
+		if err := deleteNetworks(ctx, networks[1:]...); err != nil && !isOnlyErrorNoSuchNetwork(err) {
 			return false, err
 		}
 	}
 	return len(networks) > 0, nil
 }
 
-func createNetwork(name, ipv6Subnet string, mtu int) error {
+func createNetwork(ctx context.Context, name, ipv6Subnet string, mtu int) error {
 	args := []string{"network", "create", "-d=bridge",
 		"-o", "com.docker.network.bridge.enable_ip_masquerade=true",
 	}
@@ -157,12 +158,12 @@ func createNetwork(name, ipv6Subnet string, mtu int) error {
 		args = append(args, "--ipv6", "--subnet", ipv6Subnet)
 	}
 	args = append(args, name)
-	return exec.Command("docker", args...).Run()
+	return exec.CommandContext(ctx, "docker", args...).Run()
 }
 
 // getDefaultNetworkMTU obtains the MTU from the docker default network
-func getDefaultNetworkMTU() int {
-	cmd := exec.Command("docker", "network", "inspect", "bridge",
+func getDefaultNetworkMTU(ctx context.Context) int {
+	cmd := exec.CommandContext(ctx, "docker", "network", "inspect", "bridge",
 		"-f", `{{ index .Options "com.docker.network.driver.mtu" }}`)
 	lines, err := exec.OutputLines(cmd)
 	if err != nil || len(lines) != 1 {
@@ -175,9 +176,9 @@ func getDefaultNetworkMTU() int {
 	return mtu
 }
 
-func sortedNetworksWithName(name string) ([]string, error) {
+func sortedNetworksWithName(ctx context.Context, name string) ([]string, error) {
 	// query which networks exist with the name
-	ids, err := networksWithName(name)
+	ids, err := networksWithName(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +187,7 @@ func sortedNetworksWithName(name string) ([]string, error) {
 		return ids, nil
 	}
 	// inspect them to get more detail for sorting
-	networks, err := inspectNetworks(ids)
+	networks, err := inspectNetworks(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -211,8 +212,8 @@ func sortNetworkInspectEntries(networks []networkInspectEntry) {
 	})
 }
 
-func inspectNetworks(networkIDs []string) ([]networkInspectEntry, error) {
-	inspectOut, err := exec.Output(exec.Command("docker", append([]string{"network", "inspect"}, networkIDs...)...))
+func inspectNetworks(ctx context.Context, networkIDs []string) ([]networkInspectEntry, error) {
+	inspectOut, err := exec.Output(exec.CommandContext(ctx, "docker", append([]string{"network", "inspect"}, networkIDs...)...))
 	// NOTE: the caller can detect if the network isn't present in the output anyhow
 	// we don't want to fail on this here.
 	if err != nil && !isOnlyErrorNoSuchNetwork(err) {
@@ -234,8 +235,9 @@ type networkInspectEntry struct {
 }
 
 // networksWithName returns a list of network IDs for networks with this name
-func networksWithName(name string) ([]string, error) {
-	lsOut, err := exec.Output(exec.Command(
+func networksWithName(ctx context.Context, name string) ([]string, error) {
+	lsOut, err := exec.Output(exec.CommandContext(
+		ctx,
 		"docker", "network", "ls",
 		"--filter=name=^"+regexp.QuoteMeta(name)+"$",
 		"--format={{.ID}}", // output as unambiguous IDs
@@ -250,8 +252,9 @@ func networksWithName(name string) ([]string, error) {
 	return strings.Split(cleaned, "\n"), nil
 }
 
-func checkIfNetworkExists(name string) (bool, error) {
-	out, err := exec.Output(exec.Command(
+func checkIfNetworkExists(ctx context.Context, name string) (bool, error) {
+	out, err := exec.Output(exec.CommandContext(
+		ctx,
 		"docker", "network", "ls",
 		"--filter=name=^"+regexp.QuoteMeta(name)+"$",
 		"--format={{.Name}}",
@@ -314,8 +317,8 @@ func isOnlyErrorNoSuchNetwork(err error) bool {
 	return true
 }
 
-func deleteNetworks(networks ...string) error {
-	return exec.Command("docker", append([]string{"network", "rm"}, networks...)...).Run()
+func deleteNetworks(ctx context.Context, networks ...string) error {
+	return exec.CommandContext(ctx, "docker", append([]string{"network", "rm"}, networks...)...).Run()
 }
 
 // generateULASubnetFromName generate an IPv6 subnet based on the

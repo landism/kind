@@ -17,6 +17,7 @@ limitations under the License.
 package nodes
 
 import (
+	"context"
 	"io"
 
 	"sigs.k8s.io/kind/pkg/exec"
@@ -31,10 +32,16 @@ type Node interface {
 	String() string // see also: fmt.Stringer
 	// Role should return the node's role
 	Role() (string, error) // see also: pkg/cluster/constants
+	// RoleContext is like [Role] but includes a Context
+	RoleContext(ctx context.Context) (string, error) // see also: pkg/cluster/constants
 	// TODO(bentheelder): should return node addresses more generally
 	// Possibly remove this method in favor of obtaining this detail with
 	// exec or from the provider
 	IP() (ipv4 string, ipv6 string, err error)
+	// IPContext is like [IP] but includes a Context
+	IPContext(ctx context.Context) (ipv4 string, ipv6 string, err error)
 	// SerialLogs collects the "node" container logs
 	SerialLogs(writer io.Writer) error
+	// SerialLogsContext is like [SerialLogs] but includes a Context
+	SerialLogsContext(ctx context.Context, writer io.Writer) error
 }

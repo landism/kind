@@ -17,6 +17,7 @@ limitations under the License.
 package nodeutils
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -29,9 +30,13 @@ import (
 // TODO(bentheelder): remove this in favor of specific role select methods
 // and avoid the unnecessary error handling
 func SelectNodesByRole(allNodes []nodes.Node, role string) ([]nodes.Node, error) {
+	return SelectNodesByRoleContext(context.Background(), allNodes, role)
+}
+
+func SelectNodesByRoleContext(ctx context.Context, allNodes []nodes.Node, role string) ([]nodes.Node, error) {
 	out := []nodes.Node{}
 	for _, node := range allNodes {
-		nodeRole, err := node.Role()
+		nodeRole, err := node.RoleContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -45,9 +50,13 @@ func SelectNodesByRole(allNodes []nodes.Node, role string) ([]nodes.Node, error)
 // InternalNodes returns the list of container IDs for the "nodes" in the cluster
 // that are ~Kubernetes nodes, as opposed to e.g. the external loadbalancer for HA
 func InternalNodes(allNodes []nodes.Node) ([]nodes.Node, error) {
+	return InternalNodesContext(context.Background(), allNodes)
+}
+
+func InternalNodesContext(ctx context.Context, allNodes []nodes.Node) ([]nodes.Node, error) {
 	selectedNodes := []nodes.Node{}
 	for _, node := range allNodes {
-		nodeRole, err := node.Role()
+		nodeRole, err := node.RoleContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -61,8 +70,13 @@ func InternalNodes(allNodes []nodes.Node) ([]nodes.Node, error) {
 // ExternalLoadBalancerNode returns a node handle for the external control plane
 // loadbalancer node or nil if there isn't one
 func ExternalLoadBalancerNode(allNodes []nodes.Node) (nodes.Node, error) {
+	return ExternalLoadBalancerNodeContext(context.Background(), allNodes)
+}
+
+func ExternalLoadBalancerNodeContext(ctx context.Context, allNodes []nodes.Node) (nodes.Node, error) {
 	// identify and validate external load balancer node
-	loadBalancerNodes, err := SelectNodesByRole(
+	loadBalancerNodes, err := SelectNodesByRoleContext(
+		ctx,
 		allNodes,
 		constants.ExternalLoadBalancerNodeRoleValue,
 	)
@@ -86,12 +100,16 @@ func ExternalLoadBalancerNode(allNodes []nodes.Node) (nodes.Node, error) {
 // This should be the control plane node if there is one control plane node, or a LoadBalancer otherwise.
 // It returns an error if the node list is invalid (E.G. two control planes and no load balancer)
 func APIServerEndpointNode(allNodes []nodes.Node) (nodes.Node, error) {
-	if n, err := ExternalLoadBalancerNode(allNodes); err != nil {
+	return APIServerEndpointNodeContext(context.Background(), allNodes)
+}
+
+func APIServerEndpointNodeContext(ctx context.Context, allNodes []nodes.Node) (nodes.Node, error) {
+	if n, err := ExternalLoadBalancerNodeContext(ctx, allNodes); err != nil {
 		return nil, errors.Wrap(err, "failed to find api-server endpoint node")
 	} else if n != nil {
 		return n, nil
 	}
-	n, err := ControlPlaneNodes(allNodes)
+	n, err := ControlPlaneNodesContext(ctx, allNodes)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to find api-server endpoint node")
 	}
@@ -104,7 +122,12 @@ func APIServerEndpointNode(allNodes []nodes.Node) (nodes.Node, error) {
 // ControlPlaneNodes returns all control plane nodes such that the first entry
 // is the bootstrap control plane node
 func ControlPlaneNodes(allNodes []nodes.Node) ([]nodes.Node, error) {
-	controlPlaneNodes, err := SelectNodesByRole(
+	return ControlPlaneNodesContext(context.Background(), allNodes)
+}
+
+func ControlPlaneNodesContext(ctx context.Context, allNodes []nodes.Node) ([]nodes.Node, error) {
+	controlPlaneNodes, err := SelectNodesByRoleContext(
+		ctx,
 		allNodes,
 		constants.ControlPlaneNodeRoleValue,
 	)
@@ -123,7 +146,11 @@ func ControlPlaneNodes(allNodes []nodes.Node) ([]nodes.Node, error) {
 // BootstrapControlPlaneNode returns a handle to the bootstrap control plane node
 // TODO(bentheelder): remove this. This node shouldn't be special (fix that first)
 func BootstrapControlPlaneNode(allNodes []nodes.Node) (nodes.Node, error) {
-	controlPlaneNodes, err := ControlPlaneNodes(allNodes)
+	return BootstrapControlPlaneNodeContext(context.Background(), allNodes)
+}
+
+func BootstrapControlPlaneNodeContext(ctx context.Context, allNodes []nodes.Node) (nodes.Node, error) {
+	controlPlaneNodes, err := ControlPlaneNodesContext(ctx, allNodes)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +166,11 @@ func BootstrapControlPlaneNode(allNodes []nodes.Node) (nodes.Node, error) {
 // SecondaryControlPlaneNodes returns handles to the secondary
 // control plane nodes and NOT the bootstrap control plane node
 func SecondaryControlPlaneNodes(allNodes []nodes.Node) ([]nodes.Node, error) {
-	controlPlaneNodes, err := ControlPlaneNodes(allNodes)
+	return SecondaryControlPlaneNodesContext(context.Background(), allNodes)
+}
+
+func SecondaryControlPlaneNodesContext(ctx context.Context, allNodes []nodes.Node) ([]nodes.Node, error) {
+	controlPlaneNodes, err := ControlPlaneNodesContext(ctx, allNodes)
 	if err != nil {
 		return nil, err
 	}

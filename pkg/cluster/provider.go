@@ -17,15 +17,15 @@ limitations under the License.
 package cluster
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
 
-	"sigs.k8s.io/kind/pkg/cmd/kind/version"
-
 	"sigs.k8s.io/kind/pkg/cluster/constants"
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
+	"sigs.k8s.io/kind/pkg/cmd/kind/version"
 	"sigs.k8s.io/kind/pkg/errors"
 	"sigs.k8s.io/kind/pkg/log"
 
@@ -112,14 +112,18 @@ var NoNodeProviderDetectedError = errors.NewWithoutStack("failed to detect any s
 // In the future when this is not considered experimental,
 // that logic will be in a public API as well.
 func DetectNodeProvider() (ProviderOption, error) {
+	return DetectNodeProviderContext(context.Background())
+}
+
+func DetectNodeProviderContext(ctx context.Context) (ProviderOption, error) {
 	// auto-detect based on each node provider's IsAvailable() function
-	if docker.IsAvailable() {
+	if docker.IsAvailable(ctx) {
 		return ProviderWithDocker(), nil
 	}
-	if nerdctl.IsAvailable() {
+	if nerdctl.IsAvailable(ctx) {
 		return ProviderWithNerdctl(""), nil
 	}
-	if podman.IsAvailable() {
+	if podman.IsAvailable(ctx) {
 		return ProviderWithPodman(), nil
 	}
 	return nil, errors.WithStack(NoNodeProviderDetectedError)
@@ -180,6 +184,11 @@ func ProviderWithNerdctl(binaryName string) ProviderOption {
 
 // Create provisions and starts a kubernetes-in-docker cluster
 func (p *Provider) Create(name string, options ...CreateOption) error {
+	return p.CreateContext(context.Background(), name, options...)
+}
+
+// CreateContext is like [Create] but includes a context.
+func (p *Provider) CreateContext(ctx context.Context, name string, options ...CreateOption) error {
 	// apply options
 	opts := &internalcreate.ClusterOptions{
 		NameOverride: name,
@@ -189,24 +198,39 @@ func (p *Provider) Create(name string, options ...CreateOption) error {
 			return err
 		}
 	}
-	return internalcreate.Cluster(p.logger, p.provider, opts)
+	return internalcreate.Cluster(ctx, p.logger, p.provider, opts)
 }
 
 // Delete tears down a kubernetes-in-docker cluster
 func (p *Provider) Delete(name, explicitKubeconfigPath string) error {
-	return internaldelete.Cluster(p.logger, p.provider, defaultName(name), explicitKubeconfigPath)
+	return p.DeleteContext(context.Background(), name, explicitKubeconfigPath)
+}
+
+// DeleteContext is like [Delete] but includes a context.
+func (p *Provider) DeleteContext(ctx context.Context, name, explicitKubeconfigPath string) error {
+	return internaldelete.Cluster(ctx, p.logger, p.provider, defaultName(name), explicitKubeconfigPath)
 }
 
 // List returns a list of clusters for which nodes exist
 func (p *Provider) List() ([]string, error) {
-	return p.provider.ListClusters()
+	return p.ListContext(context.Background())
+}
+
+// ListContext is like [List] but includes a context.
+func (p *Provider) ListContext(ctx context.Context) ([]string, error) {
+	return p.provider.ListClusters(ctx)
 }
 
 // KubeConfig returns the KUBECONFIG for the cluster
 // If internal is true, this will contain the internal IP etc.
 // If internal is false, this will contain the host IP etc.
 func (p *Provider) KubeConfig(name string, internal bool) (string, error) {
-	return kubeconfig.Get(p.provider, defaultName(name), !internal)
+	return p.KubeConfigContext(context.Background(), name, internal)
+}
+
+// KubeConfigContext is like [KubeConfig] but includes a context.
+func (p *Provider) KubeConfigContext(ctx context.Context, name string, internal bool) (string, error) {
+	return kubeconfig.Get(ctx, p.provider, defaultName(name), !internal)
 }
 
 // ExportKubeConfig exports the KUBECONFIG for the cluster, merging
@@ -214,29 +238,49 @@ func (p *Provider) KubeConfig(name string, internal bool) (string, error) {
 // https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#config
 // where explicitPath is the --kubeconfig value.
 func (p *Provider) ExportKubeConfig(name string, explicitPath string, internal bool) error {
-	return kubeconfig.Export(p.provider, defaultName(name), explicitPath, !internal)
+	return p.ExportKubeConfigContext(context.Background(), name, explicitPath, internal)
+}
+
+// ExportKubeConfigContext is like [ExportKubeConfig] but includes a context.
+func (p *Provider) ExportKubeConfigContext(ctx context.Context, name string, explicitPath string, internal bool) error {
+	return kubeconfig.Export(ctx, p.provider, defaultName(name), explicitPath, !internal)
 }
 
 // ListNodes returns the list of container IDs for the "nodes" in the cluster
 func (p *Provider) ListNodes(name string) ([]nodes.Node, error) {
-	return p.provider.ListNodes(defaultName(name))
+	return p.ListNodesContext(context.Background(), name)
+}
+
+// ListNodesContext is like [ListNodes] but includes a context.
+func (p *Provider) ListNodesContext(ctx context.Context, name string) ([]nodes.Node, error) {
+	return p.provider.ListNodes(ctx, defaultName(name))
 }
 
 // ListInternalNodes returns the list of container IDs for the "nodes" in the cluster
 // that are not external
 func (p *Provider) ListInternalNodes(name string) ([]nodes.Node, error) {
-	n, err := p.provider.ListNodes(name)
+	return p.ListNodesContext(context.Background(), name)
+}
+
+// ListInternalNodesContext is like [ListInternalNodes] but includes a context.
+func (p *Provider) ListInternalNodesContext(ctx context.Context, name string) ([]nodes.Node, error) {
+	n, err := p.provider.ListNodes(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return nodeutils.InternalNodes(n)
+	return nodeutils.InternalNodesContext(ctx, n)
 }
 
 // CollectLogs will populate dir with cluster logs and other debug files
 func (p *Provider) CollectLogs(name, dir string) error {
+	return p.CollectLogsContext(context.Background(), name, dir)
+}
+
+// CollectLogsContext is like [CollectLogs] but includes a context.
+func (p *Provider) CollectLogsContext(ctx context.Context, name, dir string) error {
 	// TODO: should use ListNodes and Collect should handle nodes differently
 	// based on role ...
-	n, err := p.ListInternalNodes(name)
+	n, err := p.ListInternalNodesContext(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -253,5 +297,5 @@ func (p *Provider) CollectLogs(name, dir string) error {
 		return errors.Wrap(err, "failed to write kind-version.txt")
 	}
 	// collect and write cluster logs
-	return p.provider.CollectLogs(dir, n)
+	return p.provider.CollectLogs(ctx, dir, n)
 }

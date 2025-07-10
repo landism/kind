@@ -14,12 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package installstorage implements the an action to install a default
+// Package installstorage implements an action to install a default
 // storageclass
 package installstorage
 
 import (
 	"bytes"
+	"context"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
@@ -38,29 +39,29 @@ func NewAction() actions.Action {
 }
 
 // Execute runs the action
-func (a *action) Execute(ctx *actions.ActionContext) error {
-	ctx.Status.Start("Installing StorageClass 💾")
-	defer ctx.Status.End(false)
+func (a *action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	actionContext.Status.Start("Installing StorageClass 💾")
+	defer actionContext.Status.End(false)
 
-	allNodes, err := ctx.Nodes()
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
 
 	// get the target node for this task
-	controlPlanes, err := nodeutils.ControlPlaneNodes(allNodes)
+	controlPlanes, err := nodeutils.ControlPlaneNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
 	node := controlPlanes[0] // kind expects at least one always
 
 	// add the default storage class
-	if err := addDefaultStorage(ctx.Logger, node); err != nil {
+	if err := addDefaultStorage(cctx, actionContext.Logger, node); err != nil {
 		return errors.Wrap(err, "failed to add default storage class")
 	}
 
 	// mark success
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }
 
@@ -77,12 +78,12 @@ metadata:
     storageclass.kubernetes.io/is-default-class: "true"
 provisioner: kubernetes.io/host-path`
 
-func addDefaultStorage(logger log.Logger, controlPlane nodes.Node) error {
+func addDefaultStorage(ctx context.Context, logger log.Logger, controlPlane nodes.Node) error {
 	// start with fallback default, and then try to get the newer kind node
 	// storage manifest if present
 	manifest := defaultStorageManifest
 	var raw bytes.Buffer
-	if err := controlPlane.Command("cat", "/kind/manifests/default-storage.yaml").SetStdout(&raw).Run(); err != nil {
+	if err := controlPlane.CommandContext(ctx, "cat", "/kind/manifests/default-storage.yaml").SetStdout(&raw).Run(); err != nil {
 		logger.Warn("Could not read storage manifest, falling back on old k8s.io/host-path default ...")
 	} else {
 		manifest = raw.String()
@@ -90,7 +91,8 @@ func addDefaultStorage(logger log.Logger, controlPlane nodes.Node) error {
 
 	// apply the manifest
 	in := strings.NewReader(manifest)
-	cmd := controlPlane.Command(
+	cmd := controlPlane.CommandContext(
+		ctx,
 		"kubectl",
 		"--kubeconfig=/etc/kubernetes/admin.conf", "apply", "-f", "-",
 	)

@@ -17,6 +17,7 @@ limitations under the License.
 package podman
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -63,14 +64,14 @@ func (p *provider) String() string {
 }
 
 // Provision is part of the providers.Provider interface
-func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error) {
-	if err := ensureMinVersion(); err != nil {
+func (p *provider) Provision(ctx context.Context, status *cli.Status, cfg *config.Cluster) (err error) {
+	if err := ensureMinVersion(ctx); err != nil {
 		return err
 	}
 
 	// TODO: validate cfg
 	// ensure node images are pulled before actually provisioning
-	if err := ensureNodeImages(p.logger, status, cfg); err != nil {
+	if err := ensureNodeImages(ctx, p.logger, status, cfg); err != nil {
 		return err
 	}
 
@@ -81,7 +82,7 @@ func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error
 		p.logger.Warn("WARNING: Here be dragons! This is not supported currently.")
 		networkName = n
 	}
-	if err := ensureNetwork(networkName); err != nil {
+	if err := ensureNetwork(ctx, networkName); err != nil {
 		return errors.Wrap(err, "failed to ensure podman network")
 	}
 
@@ -91,18 +92,19 @@ func (p *provider) Provision(status *cli.Status, cfg *config.Cluster) (err error
 	defer func() { status.End(err == nil) }()
 
 	// plan creating the containers
-	createContainerFuncs, err := planCreation(cfg, networkName)
+	createContainerFuncs, err := planCreation(ctx, cfg, networkName)
 	if err != nil {
 		return err
 	}
 
 	// actually create nodes
-	return errors.UntilErrorConcurrent(createContainerFuncs)
+	return errors.UntilErrorConcurrentContext(ctx, createContainerFuncs)
 }
 
 // ListClusters is part of the providers.Provider interface
-func (p *provider) ListClusters() ([]string, error) {
-	cmd := exec.Command("podman",
+func (p *provider) ListClusters(ctx context.Context) ([]string, error) {
+	cmd := exec.CommandContext(ctx,
+		"podman",
 		"ps",
 		"-a", // show stopped nodes
 		// filter for nodes with the cluster label
@@ -118,8 +120,8 @@ func (p *provider) ListClusters() ([]string, error) {
 }
 
 // ListNodes is part of the providers.Provider interface
-func (p *provider) ListNodes(cluster string) ([]nodes.Node, error) {
-	cmd := exec.Command("podman",
+func (p *provider) ListNodes(ctx context.Context, cluster string) ([]nodes.Node, error) {
+	cmd := exec.CommandContext(ctx, "podman",
 		"ps",
 		"-a", // show stopped nodes
 		// filter for nodes with the cluster label
@@ -140,7 +142,7 @@ func (p *provider) ListNodes(cluster string) ([]nodes.Node, error) {
 }
 
 // DeleteNodes is part of the providers.Provider interface
-func (p *provider) DeleteNodes(n []nodes.Node) error {
+func (p *provider) DeleteNodes(ctx context.Context, n []nodes.Node) error {
 	if len(n) == 0 {
 		return nil
 	}
@@ -154,12 +156,12 @@ func (p *provider) DeleteNodes(n []nodes.Node) error {
 	for _, node := range n {
 		args = append(args, node.String())
 	}
-	if err := exec.Command(command, args...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, command, args...).Run(); err != nil {
 		return errors.Wrap(err, "failed to delete nodes")
 	}
 	var nodeVolumes []string
 	for _, node := range n {
-		volumes, err := getVolumes(node.String())
+		volumes, err := getVolumes(ctx, node.String())
 		if err != nil {
 			return err
 		}
@@ -168,7 +170,7 @@ func (p *provider) DeleteNodes(n []nodes.Node) error {
 	if len(nodeVolumes) == 0 {
 		return nil
 	}
-	return deleteVolumes(nodeVolumes)
+	return deleteVolumes(ctx, nodeVolumes)
 }
 
 // getHostIPOrDefault defaults HostIP to localhost if is not set
@@ -181,20 +183,20 @@ func getHostIPOrDefault(hostIP string) string {
 }
 
 // GetAPIServerEndpoint is part of the providers.Provider interface
-func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
+func (p *provider) GetAPIServerEndpoint(ctx context.Context, cluster string) (string, error) {
 	// locate the node that hosts this
-	allNodes, err := p.ListNodes(cluster)
+	allNodes, err := p.ListNodes(ctx, cluster)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to list nodes")
 	}
-	n, err := nodeutils.APIServerEndpointNode(allNodes)
+	n, err := nodeutils.APIServerEndpointNodeContext(ctx, allNodes)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get api server endpoint")
 	}
 
 	// TODO: get rid of this once podman settles on how to get the port mapping using podman inspect
 	// This is only used to get the Kubeconfig server field
-	v, err := getPodmanVersion()
+	v, err := getPodmanVersion(ctx)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to check podman version")
 	}
@@ -204,7 +206,8 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 		v.LessThan(version.MustParseSemantic("3.0.0")) {
 		p.logger.Warnf("WARNING: podman version %s not fully supported, please use versions 3.0.0+")
 
-		cmd := exec.Command(
+		cmd := exec.CommandContext(
+			ctx,
 			"podman", "inspect",
 			"--format",
 			"{{range .NetworkSettings.Ports }}{{range .}}{{.HostIP}}/{{.HostPort}}{{end}}{{end}}",
@@ -232,7 +235,8 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 		return net.JoinHostPort(host, strconv.Itoa(port)), nil
 	}
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		ctx,
 		"podman", "inspect",
 		"--format",
 		"{{ json .NetworkSettings.Ports }}",
@@ -295,13 +299,13 @@ func (p *provider) GetAPIServerEndpoint(cluster string) (string, error) {
 }
 
 // GetAPIServerInternalEndpoint is part of the providers.Provider interface
-func (p *provider) GetAPIServerInternalEndpoint(cluster string) (string, error) {
+func (p *provider) GetAPIServerInternalEndpoint(ctx context.Context, cluster string) (string, error) {
 	// locate the node that hosts this
-	allNodes, err := p.ListNodes(cluster)
+	allNodes, err := p.ListNodes(ctx, cluster)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to list nodes")
 	}
-	n, err := nodeutils.APIServerEndpointNode(allNodes)
+	n, err := nodeutils.APIServerEndpointNodeContext(ctx, allNodes)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get apiserver endpoint")
 	}
@@ -317,7 +321,7 @@ func (p *provider) node(name string) nodes.Node {
 }
 
 // CollectLogs will populate dir with cluster logs and other debug files
-func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
+func (p *provider) CollectLogs(ctx context.Context, dir string, nodes []nodes.Node) error {
 	execToPathFn := func(cmd exec.Cmd, path string) func() error {
 		return func() error {
 			f, err := common.FileOnHost(path)
@@ -332,7 +336,7 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 	fns := []func() error{
 		// record info about the host podman
 		execToPathFn(
-			exec.Command("podman", "info"),
+			exec.CommandContext(ctx, "podman", "info"),
 			filepath.Join(dir, "podman-info.txt"),
 		),
 	}
@@ -343,19 +347,19 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 		node := n // https://golang.org/doc/faq#closures_and_goroutines
 		name := node.String()
 		path := filepath.Join(dir, name)
-		if err := internallogs.DumpDir(p.logger, node, "/var/log", path); err != nil {
+		if err := internallogs.DumpDir(ctx, p.logger, node, "/var/log", path); err != nil {
 			errs = append(errs, err)
 		}
 
 		fns = append(fns,
-			func() error { return common.CollectLogs(node, path) },
-			execToPathFn(exec.Command("podman", "inspect", name), filepath.Join(path, "inspect.json")),
+			func() error { return common.CollectLogs(ctx, node, path) },
+			execToPathFn(exec.CommandContext(ctx, "podman", "inspect", name), filepath.Join(path, "inspect.json")),
 			func() error {
 				f, err := common.FileOnHost(filepath.Join(path, "serial.log"))
 				if err != nil {
 					return err
 				}
-				return node.SerialLogs(f)
+				return node.SerialLogsContext(ctx, f)
 			},
 		)
 	}
@@ -367,10 +371,10 @@ func (p *provider) CollectLogs(dir string, nodes []nodes.Node) error {
 
 // Info returns the provider info.
 // The info is cached on the first time of the execution.
-func (p *provider) Info() (*providers.ProviderInfo, error) {
+func (p *provider) Info(ctx context.Context) (*providers.ProviderInfo, error) {
 	if p.info == nil {
 		var err error
-		p.info, err = info(p.logger)
+		p.info, err = info(ctx, p.logger)
 		if err != nil {
 			return p.info, err
 		}
@@ -392,10 +396,10 @@ type podmanInfo struct {
 }
 
 // info detects ProviderInfo by executing `podman info --format json`.
-func info(logger log.Logger) (*providers.ProviderInfo, error) {
+func info(ctx context.Context, logger log.Logger) (*providers.ProviderInfo, error) {
 	const podman = "podman"
 	args := []string{"info", "--format", "json"}
-	cmd := exec.Command(podman, args...)
+	cmd := exec.CommandContext(ctx, podman, args...)
 	out, err := exec.Output(cmd)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get podman info (%s %s): %q",
@@ -422,7 +426,7 @@ func info(logger log.Logger) (*providers.ProviderInfo, error) {
 	cgroupSupportsPidsLimit := true
 	cgroupSupportsCPUShares := true
 
-	v, err := getPodmanVersion()
+	v, err := getPodmanVersion(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to check podman version")
 	}

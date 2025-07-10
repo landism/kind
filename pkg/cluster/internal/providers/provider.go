@@ -17,6 +17,8 @@ limitations under the License.
 package providers
 
 import (
+	"context"
+
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
 
 	"sigs.k8s.io/kind/pkg/internal/apis/config"
@@ -28,25 +30,25 @@ import (
 type Provider interface {
 	// Provision should create and start the nodes, just short of
 	// actually starting up Kubernetes, based on the given cluster config
-	Provision(status *cli.Status, cfg *config.Cluster) error
+	Provision(ctx context.Context, status *cli.Status, cfg *config.Cluster) error
 	// ListClusters discovers the clusters that currently have resources
 	// under this providers
-	ListClusters() ([]string, error)
+	ListClusters(ctx context.Context) ([]string, error)
 	// ListNodes returns the nodes under this provider for the given
 	// cluster name, they may or may not be running correctly
-	ListNodes(cluster string) ([]nodes.Node, error)
+	ListNodes(ctx context.Context, cluster string) ([]nodes.Node, error)
 	// DeleteNodes deletes the provided list of nodes
 	// These should be from results previously returned by this provider
 	// E.G. by ListNodes()
-	DeleteNodes([]nodes.Node) error
+	DeleteNodes(context.Context, []nodes.Node) error
 	// GetAPIServerEndpoint returns the host endpoint for the cluster's API server
-	GetAPIServerEndpoint(cluster string) (string, error)
+	GetAPIServerEndpoint(ctx context.Context, cluster string) (string, error)
 	// GetAPIServerInternalEndpoint returns the internal network endpoint for the cluster's API server
-	GetAPIServerInternalEndpoint(cluster string) (string, error)
+	GetAPIServerInternalEndpoint(ctx context.Context, cluster string) (string, error)
 	// CollectLogs will populate dir with cluster logs and other debug files
-	CollectLogs(dir string, nodes []nodes.Node) error
+	CollectLogs(ctx context.Context, dir string, nodes []nodes.Node) error
 	// Info returns the provider info
-	Info() (*ProviderInfo, error)
+	Info(ctx context.Context) (*ProviderInfo, error)
 }
 
 // ProviderInfo is the info of the provider

@@ -17,6 +17,7 @@ limitations under the License.
 package actions
 
 import (
+	"context"
 	"sync"
 
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
@@ -30,7 +31,7 @@ import (
 // Action defines a step of bringing up a kind cluster after initial node
 // container creation
 type Action interface {
-	Execute(ctx *ActionContext) error
+	Execute(cctx context.Context, actionContext *ActionContext) error
 }
 
 // ActionContext is data supplied to all actions
@@ -76,12 +77,12 @@ func (cd *cachedData) setNodes(n []nodes.Node) {
 }
 
 // Nodes returns the list of cluster nodes, this is a cached call
-func (ac *ActionContext) Nodes() ([]nodes.Node, error) {
+func (ac *ActionContext) Nodes(ctx context.Context) ([]nodes.Node, error) {
 	cachedNodes := ac.cache.getNodes()
 	if cachedNodes != nil {
 		return cachedNodes, nil
 	}
-	n, err := ac.Provider.ListNodes(ac.Config.Name)
+	n, err := ac.Provider.ListNodes(ctx, ac.Config.Name)
 	if err != nil {
 		return nil, err
 	}

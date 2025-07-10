@@ -19,18 +19,19 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/cluster/constants"
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
+	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/errors"
 
 	"sigs.k8s.io/kind/pkg/cluster/internal/create/actions"
 	"sigs.k8s.io/kind/pkg/cluster/internal/kubeadm"
 	"sigs.k8s.io/kind/pkg/cluster/internal/providers/common"
-	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/internal/apis/config"
 	"sigs.k8s.io/kind/pkg/internal/patch"
 )
@@ -44,62 +45,62 @@ func NewAction() actions.Action {
 }
 
 // Execute runs the action
-func (a *Action) Execute(ctx *actions.ActionContext) error {
-	ctx.Status.Start("Writing configuration 📜")
-	defer ctx.Status.End(false)
+func (a *Action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	actionContext.Status.Start("Writing configuration 📜")
+	defer actionContext.Status.End(false)
 
-	providerInfo, err := ctx.Provider.Info()
+	providerInfo, err := actionContext.Provider.Info(cctx)
 	if err != nil {
 		return err
 	}
 
-	allNodes, err := ctx.Nodes()
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
 
-	controlPlaneEndpoint, err := ctx.Provider.GetAPIServerInternalEndpoint(ctx.Config.Name)
+	controlPlaneEndpoint, err := actionContext.Provider.GetAPIServerInternalEndpoint(cctx, actionContext.Config.Name)
 	if err != nil {
 		return err
 	}
 
 	// create kubeadm init config
-	fns := []func() error{}
+	fns := []func(ctx context.Context) error{}
 
-	provider := fmt.Sprintf("%s", ctx.Provider)
+	provider := fmt.Sprintf("%s", actionContext.Provider)
 	configData := kubeadm.ConfigData{
 		NodeProvider:         provider,
-		ClusterName:          ctx.Config.Name,
+		ClusterName:          actionContext.Config.Name,
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		APIBindPort:          common.APIServerInternalPort,
-		APIServerAddress:     ctx.Config.Networking.APIServerAddress,
+		APIServerAddress:     actionContext.Config.Networking.APIServerAddress,
 		Token:                kubeadm.Token,
-		PodSubnet:            ctx.Config.Networking.PodSubnet,
-		KubeProxyMode:        string(ctx.Config.Networking.KubeProxyMode),
-		ServiceSubnet:        ctx.Config.Networking.ServiceSubnet,
+		PodSubnet:            actionContext.Config.Networking.PodSubnet,
+		KubeProxyMode:        string(actionContext.Config.Networking.KubeProxyMode),
+		ServiceSubnet:        actionContext.Config.Networking.ServiceSubnet,
 		ControlPlane:         true,
-		IPFamily:             ctx.Config.Networking.IPFamily,
-		FeatureGates:         ctx.Config.FeatureGates,
-		RuntimeConfig:        ctx.Config.RuntimeConfig,
+		IPFamily:             actionContext.Config.Networking.IPFamily,
+		FeatureGates:         actionContext.Config.FeatureGates,
+		RuntimeConfig:        actionContext.Config.RuntimeConfig,
 		RootlessProvider:     providerInfo.Rootless,
 	}
 
-	kubeadmConfigPlusPatches := func(node nodes.Node, data kubeadm.ConfigData) func() error {
-		return func() error {
+	kubeadmConfigPlusPatches := func(node nodes.Node, data kubeadm.ConfigData) func(ctx context.Context) error {
+		return func(ctx context.Context) error {
 			data.NodeName = node.String()
-			kubeadmConfig, err := getKubeadmConfig(ctx.Config, data, node, provider)
+			kubeadmConfig, err := getKubeadmConfig(cctx, actionContext.Config, data, node, provider)
 			if err != nil {
 				// TODO(bentheelder): logging here
 				return errors.Wrap(err, "failed to generate kubeadm config content")
 			}
 
-			ctx.Logger.V(2).Infof("Using the following kubeadm config for node %s:\n%s", node.String(), kubeadmConfig)
-			return writeKubeadmConfig(kubeadmConfig, node)
+			actionContext.Logger.V(2).Infof("Using the following kubeadm config for node %s:\n%s", node.String(), kubeadmConfig)
+			return writeKubeadmConfig(ctx, kubeadmConfig, node)
 		}
 	}
 
 	// create the kubeadm join configuration for the kubernetes cluster nodes only
-	kubeNodes, err := nodeutils.InternalNodes(allNodes)
+	kubeNodes, err := nodeutils.InternalNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
@@ -111,12 +112,12 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// Create the kubeadm config in all nodes concurrently
-	if err := errors.UntilErrorConcurrent(fns); err != nil {
+	if err := errors.UntilErrorConcurrentContext(cctx, fns); err != nil {
 		return err
 	}
 
 	// if we have containerd config, patch all the nodes concurrently
-	if len(ctx.Config.ContainerdConfigPatches) > 0 || len(ctx.Config.ContainerdConfigPatchesJSON6902) > 0 {
+	if len(actionContext.Config.ContainerdConfigPatches) > 0 || len(actionContext.Config.ContainerdConfigPatchesJSON6902) > 0 {
 		fns := make([]func() error, len(kubeNodes))
 		for i, node := range kubeNodes {
 			node := node // capture loop variable
@@ -124,19 +125,19 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 				// read and patch the config
 				const containerdConfigPath = "/etc/containerd/config.toml"
 				var buff bytes.Buffer
-				if err := node.Command("cat", containerdConfigPath).SetStdout(&buff).Run(); err != nil {
+				if err := node.CommandContext(cctx, "cat", containerdConfigPath).SetStdout(&buff).Run(); err != nil {
 					return errors.Wrap(err, "failed to read containerd config from node")
 				}
-				patched, err := patch.TOML(buff.String(), ctx.Config.ContainerdConfigPatches, ctx.Config.ContainerdConfigPatchesJSON6902)
+				patched, err := patch.TOML(buff.String(), actionContext.Config.ContainerdConfigPatches, actionContext.Config.ContainerdConfigPatchesJSON6902)
 				if err != nil {
 					return errors.Wrap(err, "failed to patch containerd config")
 				}
-				if err := nodeutils.WriteFile(node, containerdConfigPath, patched); err != nil {
+				if err := nodeutils.WriteFileContext(cctx, node, containerdConfigPath, patched); err != nil {
 					return errors.Wrap(err, "failed to write patched containerd config")
 				}
 				// restart containerd now that we've re-configured it
 				// skip if containerd is not running
-				if err := node.Command("bash", "-c", `! pgrep --exact containerd || systemctl restart containerd`).Run(); err != nil {
+				if err := node.CommandContext(cctx, "bash", "-c", `! pgrep --exact containerd || systemctl restart containerd`).Run(); err != nil {
 					return errors.Wrap(err, "failed to restart containerd after patching config")
 				}
 				return nil
@@ -148,14 +149,14 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// mark success
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }
 
 // getKubeadmConfig generates the kubeadm config contents for the cluster
 // by running data through the template and applying patches as needed.
-func getKubeadmConfig(cfg *config.Cluster, data kubeadm.ConfigData, node nodes.Node, provider string) (path string, err error) {
-	kubeVersion, err := nodeutils.KubeVersion(node)
+func getKubeadmConfig(ctx context.Context, cfg *config.Cluster, data kubeadm.ConfigData, node nodes.Node, provider string) (path string, err error) {
+	kubeVersion, err := nodeutils.KubeVersionContext(ctx, node)
 	if err != nil {
 		// TODO(bentheelder): logging here
 		return "", errors.Wrap(err, "failed to get kubernetes version from node")
@@ -180,7 +181,7 @@ func getKubeadmConfig(cfg *config.Cluster, data kubeadm.ConfigData, node nodes.N
 	}
 
 	// get the node ip address
-	nodeAddress, nodeAddressIPv6, err := node.IP()
+	nodeAddress, nodeAddressIPv6, err := node.IPContext(ctx)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get IP for node")
 	}
@@ -259,9 +260,9 @@ func allPatchesFromConfig(cfg *config.Cluster) (patches []string, jsonPatches []
 }
 
 // writeKubeadmConfig writes the kubeadm configuration in the specified node
-func writeKubeadmConfig(kubeadmConfig string, node nodes.Node) error {
+func writeKubeadmConfig(ctx context.Context, kubeadmConfig string, node nodes.Node) error {
 	// copy the config to the node
-	if err := nodeutils.WriteFile(node, "/kind/kubeadm.conf", kubeadmConfig); err != nil {
+	if err := nodeutils.WriteFileContext(ctx, node, "/kind/kubeadm.conf", kubeadmConfig); err != nil {
 		// TODO(bentheelder): logging here
 		return errors.Wrap(err, "failed to copy kubeadm config to node")
 	}

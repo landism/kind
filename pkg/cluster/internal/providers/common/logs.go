@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -11,7 +12,7 @@ import (
 
 // CollectLogs provides the common functionality
 // to get various debug info from the node
-func CollectLogs(n nodes.Node, dir string) error {
+func CollectLogs(ctx context.Context, n nodes.Node, dir string) error {
 	execToPathFn := func(cmd exec.Cmd, path string) func() error {
 		return func() error {
 			f, err := FileOnHost(filepath.Join(dir, path))
@@ -26,23 +27,23 @@ func CollectLogs(n nodes.Node, dir string) error {
 	return errors.AggregateConcurrent([]func() error{
 		// record info about the node container
 		execToPathFn(
-			n.Command("cat", "/kind/version"),
+			n.CommandContext(ctx, "cat", "/kind/version"),
 			"kubernetes-version.txt",
 		),
 		execToPathFn(
-			n.Command("journalctl", "--no-pager"),
+			n.CommandContext(ctx, "journalctl", "--no-pager"),
 			"journal.log",
 		),
 		execToPathFn(
-			n.Command("journalctl", "--no-pager", "-u", "kubelet.service"),
+			n.CommandContext(ctx, "journalctl", "--no-pager", "-u", "kubelet.service"),
 			"kubelet.log",
 		),
 		execToPathFn(
-			n.Command("journalctl", "--no-pager", "-u", "containerd.service"),
+			n.CommandContext(ctx, "journalctl", "--no-pager", "-u", "containerd.service"),
 			"containerd.log",
 		),
 		execToPathFn(
-			n.Command("crictl", "images"),
+			n.CommandContext(ctx, "crictl", "images"),
 			"images.log",
 		),
 	})

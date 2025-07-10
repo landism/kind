@@ -18,6 +18,7 @@ limitations under the License.
 package loadbalancer
 
 import (
+	"context"
 	"fmt"
 
 	"sigs.k8s.io/kind/pkg/cluster/constants"
@@ -40,8 +41,8 @@ func NewAction() actions.Action {
 }
 
 // Execute runs the action
-func (a *Action) Execute(ctx *actions.ActionContext) error {
-	allNodes, err := ctx.Nodes()
+func (a *Action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
@@ -58,12 +59,13 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// otherwise notify the user
-	ctx.Status.Start("Configuring the external load balancer ⚖️")
-	defer ctx.Status.End(false)
+	actionContext.Status.Start("Configuring the external load balancer ⚖️")
+	defer actionContext.Status.End(false)
 
 	// collect info about the existing controlplane nodes
 	var backendServers = map[string]string{}
-	controlPlaneNodes, err := nodeutils.SelectNodesByRole(
+	controlPlaneNodes, err := nodeutils.SelectNodesByRoleContext(
+		cctx,
 		allNodes,
 		constants.ControlPlaneNodeRoleValue,
 	)
@@ -78,14 +80,14 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 	loadbalancerConfig, err := loadbalancer.Config(&loadbalancer.ConfigData{
 		ControlPlanePort: common.APIServerInternalPort,
 		BackendServers:   backendServers,
-		IPv6:             ctx.Config.Networking.IPFamily == config.IPv6Family,
+		IPv6:             actionContext.Config.Networking.IPFamily == config.IPv6Family,
 	})
 	if err != nil {
 		return errors.Wrap(err, "failed to generate loadbalancer config data")
 	}
 
 	// create loadbalancer config on the node
-	if err := nodeutils.WriteFile(loadBalancerNode, loadbalancer.ConfigPath, loadbalancerConfig); err != nil {
+	if err := nodeutils.WriteFileContext(cctx, loadBalancerNode, loadbalancer.ConfigPath, loadbalancerConfig); err != nil {
 		// TODO: logging here
 		return errors.Wrap(err, "failed to copy loadbalancer config to node")
 	}
@@ -95,6 +97,6 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 		return errors.Wrap(err, "failed to reload loadbalancer")
 	}
 
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }

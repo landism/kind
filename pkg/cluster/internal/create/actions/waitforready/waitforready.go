@@ -18,6 +18,7 @@ limitations under the License.
 package waitforready
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -43,24 +44,24 @@ func NewAction(waitTime time.Duration) actions.Action {
 }
 
 // Execute runs the action
-func (a *Action) Execute(ctx *actions.ActionContext) error {
+func (a *Action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
 	// skip entirely if the wait time is 0
 	if a.waitTime == time.Duration(0) {
 		return nil
 	}
-	ctx.Status.Start(
+	actionContext.Status.Start(
 		fmt.Sprintf(
 			"Waiting ≤ %s for control-plane = Ready ⏳",
 			formatDuration(a.waitTime),
 		),
 	)
 
-	allNodes, err := ctx.Nodes()
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
 	// get a control plane node to use to check cluster status
-	controlPlanes, err := nodeutils.ControlPlaneNodes(allNodes)
+	controlPlanes, err := nodeutils.ControlPlaneNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
@@ -71,7 +72,7 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 
 	// TODO: Remove the below handling once kubeadm 1.23 is no longer supported.
 	// https://github.com/kubernetes-sigs/kind/issues/1699
-	rawVersion, err := nodeutils.KubeVersion(node)
+	rawVersion, err := nodeutils.KubeVersionContext(cctx, node)
 	if err != nil {
 		return errors.Wrap(err, "failed to get Kubernetes version from node")
 	}
@@ -84,24 +85,25 @@ func (a *Action) Execute(ctx *actions.ActionContext) error {
 		selectorLabel = "node-role.kubernetes.io/master"
 	}
 
-	isReady := waitForReady(node, startTime.Add(a.waitTime), selectorLabel)
+	isReady := waitForReady(cctx, node, startTime.Add(a.waitTime), selectorLabel)
 	if !isReady {
-		ctx.Status.End(false)
-		ctx.Logger.V(0).Info(" • WARNING: Timed out waiting for Ready ⚠️")
+		actionContext.Status.End(false)
+		actionContext.Logger.V(0).Info(" • WARNING: Timed out waiting for Ready ⚠️")
 		return nil
 	}
 
 	// mark success
-	ctx.Status.End(true)
-	ctx.Logger.V(0).Infof(" • Ready after %s 💚", formatDuration(time.Since(startTime)))
+	actionContext.Status.End(true)
+	actionContext.Logger.V(0).Infof(" • Ready after %s 💚", formatDuration(time.Since(startTime)))
 	return nil
 }
 
 // WaitForReady uses kubectl inside the "node" container to check if the
 // control plane nodes are "Ready".
-func waitForReady(node nodes.Node, until time.Time, selectorLabel string) bool {
+func waitForReady(ctx context.Context, node nodes.Node, until time.Time, selectorLabel string) bool {
 	return tryUntil(until, func() bool {
-		cmd := node.Command(
+		cmd := node.CommandContext(
+			ctx,
 			"kubectl",
 			"--kubeconfig=/etc/kubernetes/admin.conf",
 			"get",

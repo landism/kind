@@ -18,6 +18,7 @@ limitations under the License.
 package kubeadminit
 
 import (
+	"context"
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/errors"
@@ -43,11 +44,11 @@ func NewAction(cfg *config.Cluster) actions.Action {
 }
 
 // Execute runs the action
-func (a *action) Execute(ctx *actions.ActionContext) error {
-	ctx.Status.Start("Starting control-plane 🕹️")
-	defer ctx.Status.End(false)
+func (a *action) Execute(cctx context.Context, actionContext *actions.ActionContext) error {
+	actionContext.Status.Start("Starting control-plane 🕹️")
+	defer actionContext.Status.End(false)
 
-	allNodes, err := ctx.Nodes()
+	allNodes, err := actionContext.Nodes(cctx)
 	if err != nil {
 		return err
 	}
@@ -55,12 +56,12 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 	// get the target node for this task
 	// TODO: eliminate the concept of bootstrapcontrolplane node entirely
 	// outside this method
-	node, err := nodeutils.BootstrapControlPlaneNode(allNodes)
+	node, err := nodeutils.BootstrapControlPlaneNodeContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
 
-	kubeVersionStr, err := nodeutils.KubeVersion(node)
+	kubeVersionStr, err := nodeutils.KubeVersionContext(cctx, node)
 	if err != nil {
 		return errors.Wrap(err, "failed to get kubernetes version from node")
 	}
@@ -91,15 +92,15 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// run kubeadm
-	cmd := node.Command("kubeadm", args...)
+	cmd := node.CommandContext(cctx, "kubeadm", args...)
 	lines, err := exec.CombinedOutputLines(cmd)
-	ctx.Logger.V(3).Info(strings.Join(lines, "\n"))
+	actionContext.Logger.V(3).Info(strings.Join(lines, "\n"))
 	if err != nil {
 		return errors.Wrap(err, "failed to init node with kubeadm")
 	}
 
 	// copy some files to the other control plane nodes
-	otherControlPlanes, err := nodeutils.SecondaryControlPlaneNodes(allNodes)
+	otherControlPlanes, err := nodeutils.SecondaryControlPlaneNodesContext(cctx, allNodes)
 	if err != nil {
 		return err
 	}
@@ -115,7 +116,7 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 			// handled differently
 			"/etc/kubernetes/pki/etcd/ca.crt", "/etc/kubernetes/pki/etcd/ca.key",
 		} {
-			if err := nodeutils.CopyNodeToNode(node, otherNode, file); err != nil {
+			if err := nodeutils.CopyNodeToNodeContext(cctx, node, otherNode, file); err != nil {
 				return errors.Wrap(err, "failed to copy admin kubeconfig")
 			}
 		}
@@ -127,7 +128,7 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 		// TODO: Once kubeadm 1.23 is no longer supported remove the <1.24 handling.
 		// TODO: Once kubeadm 1.24 is no longer supported remove the <1.25 handling.
 		// https://github.com/kubernetes-sigs/kind/issues/1699
-		rawVersion, err := nodeutils.KubeVersion(node)
+		rawVersion, err := nodeutils.KubeVersionContext(cctx, node)
 		if err != nil {
 			return errors.Wrap(err, "failed to get Kubernetes version from node")
 		}
@@ -168,6 +169,6 @@ func (a *action) Execute(ctx *actions.ActionContext) error {
 	}
 
 	// mark success
-	ctx.Status.End(true)
+	actionContext.Status.End(true)
 	return nil
 }

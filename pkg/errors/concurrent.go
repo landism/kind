@@ -17,17 +17,30 @@ limitations under the License.
 package errors
 
 import (
+	"context"
 	"sync"
 )
 
 // UntilErrorConcurrent runs all funcs in separate goroutines, returning the
 // first non-nil error returned from funcs, or nil if all funcs return nil
 func UntilErrorConcurrent(funcs []func() error) error {
+	var f2 []func(ctx context.Context) error
+	for _, f := range funcs {
+		f2 = append(f2, func(_ context.Context) error {
+			return f()
+		})
+	}
+	return UntilErrorConcurrentContext(context.Background(), f2)
+}
+
+// UntilErrorConcurrentContext behaves the same as UntilErrorConcurrent, but passes the functions
+// the given Context
+func UntilErrorConcurrentContext(ctx context.Context, funcs []func(ctx context.Context) error) error {
 	errCh := make(chan error, len(funcs))
 	for _, f := range funcs {
 		f := f // capture f
 		go func() {
-			errCh <- f()
+			errCh <- f(ctx)
 		}()
 	}
 	for i := 0; i < len(funcs); i++ {
